@@ -14,6 +14,9 @@ COPY src /app/src
 # Копируем wrapper
 COPY gradle/wrapper /app/gradle/wrapper
 
+# Делаем gradlew исполняемым
+RUN chmod +x gradlew
+
 # Собираем shadowJar
 RUN ./gradlew shadowJar --no-daemon
 
