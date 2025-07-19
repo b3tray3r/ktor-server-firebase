@@ -16,12 +16,42 @@ import io.ktor.serialization.kotlinx.json.*
 
 private val PROJECT_ID = "ktor-server-b3tray3r"  // Замените на свой ID из Firebase
 private val BASE_URL = "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents/users"
+private const val DISCORD_BOT_TOKEN = "Bot MTM5NjE1ODg2OTAyOTI1NzM5Nw.G0f_zf.QPCbWrRAWY5FP9TTUY-BV3y0OVFVeM5mBL2bJc"
+private const val DISCORD_GUILD_ID = "722201462939058317"
 
 private val client = HttpClient(CIO) {
     install(ContentNegotiation) {
         json()
     }
 }
+
+@Serializable
+data class DiscordGuildData(
+    val approximate_member_count: Int? = null,
+    val approximate_presence_count: Int? = null
+)
+
+suspend fun getDiscordGuildInfo(): DiscordGuildData? {
+    return try {
+        val response = client.get("https://discord.com/api/v10/guilds/$DISCORD_GUILD_ID?with_counts=true") {
+            headers {
+                append("Authorization", DISCORD_BOT_TOKEN)
+            }
+        }
+        if (response.status == HttpStatusCode.OK) {
+            val json = kotlinx.serialization.json.Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            DiscordGuildData(
+                approximate_member_count = json["approximate_member_count"]?.jsonPrimitive?.intOrNull,
+                approximate_presence_count = json["approximate_presence_count"]?.jsonPrimitive?.intOrNull
+            )
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
 
 @Serializable
 data class UserCreateRequest(
@@ -137,6 +167,14 @@ fun Route.userRoutes() {
         }
 
         call.respond(HttpStatusCode.OK, "User deleted successfully")
+    }
+    get("/discord") {
+        val guildInfo = getDiscordGuildInfo()
+        if (guildInfo != null) {
+            call.respond(guildInfo)
+        } else {
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to get Discord data"))
+        }
     }
 
 }
