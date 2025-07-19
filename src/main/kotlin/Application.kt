@@ -27,7 +27,8 @@ fun Application.module() {
         allowMethod(HttpMethod.Post)
         allowMethod(HttpMethod.Delete)
         allowMethod(HttpMethod.Options)
-        allowHost("b3tray3r.github.io", schemes = listOf("https"))
+        /* allowHost("b3tray3r.github.io", schemes = listOf("https")) */
+        anyHost()
         allowHeader(HttpHeaders.ContentType)
     }
     install(CallLogging)
