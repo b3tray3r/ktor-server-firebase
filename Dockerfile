@@ -19,7 +19,7 @@ RUN chmod +x gradlew
 
 # Собираем shadowJar
 RUN chmod +x ./gradlew
-RUN ./gradlew shadowJar --no-daemon
+RUN ./gradlew shadowJar --no-daemon --stacktrace --warning-mode all
 
 # Указываем порт
 EXPOSE 8080
