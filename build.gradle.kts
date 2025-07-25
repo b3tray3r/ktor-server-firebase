@@ -1,5 +1,5 @@
 val kotlinversion = "2.1.0"
-val ktorversion = "2.3.7"
+val ktorversion = "2.3.4"
 val logbackversion = "1.2.11"
 val serializationversion = "1.5.1"
 
@@ -34,8 +34,7 @@ dependencies {
     implementation("io.ktor:ktor-client-core:$ktorversion")
     implementation("io.ktor:ktor-client-cio:$ktorversion")
     implementation("io.ktor:ktor-client-content-negotiation:$ktorversion")
-
-
+    implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationversion")
     implementation("ch.qos.logback:logback-classic:$logbackversion")
 
