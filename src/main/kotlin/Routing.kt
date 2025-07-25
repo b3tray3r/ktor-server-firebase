@@ -123,7 +123,86 @@ suspend fun addUser(user: UserCreateRequest): User? {
     return parseUser(json)
 }
 
+fun Route.steamAuthRoutes() {
+    get("/steam/login") {
+        val returnUrl = "https://ktor-server-u2py.onrender.com/steam/callback"  // замени на свой Render-домен
+        val realm = "https://ktor-server-u2py.onrender.com/"
+
+        val redirectUrl = buildString {
+            append("https://steamcommunity.com/openid/login?")
+            append("openid.ns=http://specs.openid.net/auth/2.0")
+            append("&openid.mode=checkid_setup")
+            append("&openid.return_to=$returnUrl")
+            append("&openid.realm=$realm")
+            append("&openid.identity=http://specs.openid.net/auth/2.0/identifier_select")
+            append("&openid.claimed_id=http://specs.openid.net/auth/2.0/identifier_select")
+        }
+
+        call.respondRedirect(redirectUrl)
+    }
+
+    get("/steam/callback") {
+        val params = call.request.queryParameters
+        val steamOpenIdUrl = "https://steamcommunity.com/openid/login"
+
+        val verifyResponse = client.post(steamOpenIdUrl) {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(FormDataContent(Parameters.build {
+                append("openid.assoc_handle", params["openid.assoc_handle"] ?: "")
+                append("openid.signed", params["openid.signed"] ?: "")
+                append("openid.sig", params["openid.sig"] ?: "")
+                append("openid.ns", params["openid.ns"] ?: "")
+                params["openid.signed"]?.split(",")?.forEach {
+                    append("openid.$it", params["openid.$it"] ?: "")
+                }
+                append("openid.mode", "check_authentication")
+            }))
+        }
+
+        val body = verifyResponse.bodyAsText()
+
+        if (body.contains("is_valid:true")) {
+            val steamId = params["openid.claimed_id"]?.substringAfterLast("/") ?: return@get call.respondText("Steam ID не найден")
+
+            // Проверка в Firestore
+            val exists = checkIfSteamUserExists(steamId)
+            if (!exists) {
+                saveSteamUser(steamId)
+            }
+
+            call.respondText("Добро пожаловать! Твой Steam ID: $steamId")
+        } else {
+            call.respondText("Ошибка авторизации через Steam")
+        }
+    }
+}
+
+suspend fun checkIfSteamUserExists(steamId: String): Boolean {
+    val response = client.get("https://firestore.googleapis.com/v1/projects/ktor-server-b3tray3r/databases/(default)/documents/steam_users/$steamId")
+    return response.status == HttpStatusCode.OK
+}
+
+suspend fun saveSteamUser(steamId: String) {
+    val now = kotlinx.datetime.Clock.System.now().toString()
+
+    val data = buildJsonObject {
+        put("fields", buildJsonObject {
+            put("steam_id", buildJsonObject { put("stringValue", steamId) })
+            put("joined", buildJsonObject { put("stringValue", now) })
+        })
+    }
+
+    client.patch("https://firestore.googleapis.com/v1/projects/ktor-server-b3tray3r/databases/(default)/documents/steam_users/$steamId") {
+        contentType(ContentType.Application.Json)
+        setBody(data)
+    }
+}
+
+
 fun Route.userRoutes() {
+
+    
+    
     get("/") {
         val users = getAllUsers()
         call.respond(users)
@@ -176,5 +255,6 @@ fun Route.userRoutes() {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to get Discord data"))
         }
     }
-
+    steamAuthRoutes()
+    
 }
