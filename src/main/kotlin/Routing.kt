@@ -11,6 +11,7 @@ import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
+import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.statement.*
 import io.ktor.serialization.kotlinx.json.*
 
@@ -192,7 +193,7 @@ suspend fun saveSteamUser(steamId: String) {
         })
     }
 
-    client.patch("https://firestore.googleapis.com/v1/projects/ktor-server-b3tray3r/databases/(default)/documents/steam_users/$steamId") {
+    client.post("https://firestore.googleapis.com/v1/projects/ktor-server-b3tray3r/databases/(default)/documents/steam_users/$steamId") {
         contentType(ContentType.Application.Json)
         setBody(data)
     }
@@ -201,8 +202,8 @@ suspend fun saveSteamUser(steamId: String) {
 
 fun Route.userRoutes() {
 
-    
-    
+
+
     get("/") {
         val users = getAllUsers()
         call.respond(users)
@@ -256,5 +257,5 @@ fun Route.userRoutes() {
         }
     }
     steamAuthRoutes()
-    
+
 }
