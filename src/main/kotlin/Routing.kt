@@ -193,7 +193,7 @@ suspend fun saveSteamUser(steamId: String) {
         })
     }
 
-    client.post("https://firestore.googleapis.com/v1/projects/ktor-server-b3tray3r/databases/(default)/documents/steam_users/$steamId") {
+    client.post("https://firestore.googleapis.com/v1/projects/ktor-server-b3tray3r/databases/(default)/documents/steam_users") {
         contentType(ContentType.Application.Json)
         setBody(data)
     }
