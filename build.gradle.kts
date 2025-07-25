@@ -1,5 +1,5 @@
 val kotlinversion = "2.1.0"
-val ktorversion = "2.3.4"
+val ktorversion = "2.3.7"
 val logbackversion = "1.2.11"
 val serializationversion = "1.5.1"
 
