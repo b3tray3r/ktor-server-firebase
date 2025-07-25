@@ -19,6 +19,7 @@ private val PROJECT_ID = "ktor-server-b3tray3r"  // Замените на сво
 private val BASE_URL = "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents/users"
 private const val DISCORD_BOT_TOKEN = "Bot MTM5NjE1ODg2OTAyOTI1NzM5Nw.G0f_zf.QPCbWrRAWY5FP9TTUY-BV3y0OVFVeM5mBL2bJc"
 private const val DISCORD_GUILD_ID = "722201462939058317"
+private const val STEAM_API_KEY = "ECCB6C28A6D2DFE42E04E8C770364443"
 
 private val client = HttpClient(CIO) {
     install(ContentNegotiation) {
@@ -165,6 +166,19 @@ fun Route.steamAuthRoutes() {
         if (body.contains("is_valid:true")) {
             val steamId = params["openid.claimed_id"]?.substringAfterLast("/") ?: return@get call.respondText("Steam ID не найден")
 
+            val apiKey = STEAM_API_KEY  // твой Steam API ключ
+            val profileUrl = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=$apiKey&steamids=$steamId"
+
+            val steamResponse = client.get(profileUrl)
+            val steamData = Json.parseToJsonElement(steamResponse.bodyAsText()).jsonObject
+
+            val player = steamData["response"]?.jsonObject
+                ?.get("players")?.jsonArray?.firstOrNull()?.jsonObject
+
+            val name = player?.get("personaname")?.jsonPrimitive?.contentOrNull
+            val avatar = player?.get("avatarfull")?.jsonPrimitive?.contentOrNull
+            val profileUrlSteam = player?.get("profileurl")?.jsonPrimitive?.contentOrNull
+
             // Проверка в Firestore
             val exists = checkIfSteamUserExists(steamId)
             if (!exists) {
@@ -184,11 +198,24 @@ suspend fun checkIfSteamUserExists(steamId: String): Boolean {
 }
 
 suspend fun saveSteamUser(steamId: String) {
+    val apiKey = STEAM_API_KEY
     val now = kotlinx.datetime.Clock.System.now().toString()
+    val response = client.get("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=$apiKey&steamids=$steamId")
+    val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+
+    val player = json["response"]?.jsonObject
+        ?.get("players")?.jsonArray?.firstOrNull()?.jsonObject
+
+    val name = player?.get("personaname")?.jsonPrimitive?.content ?: "Unknown"
+    val avatar = player?.get("avatarfull")?.jsonPrimitive?.content ?: ""
+    val profileUrl = player?.get("profileurl")?.jsonPrimitive?.content ?: ""
 
     val data = buildJsonObject {
         put("fields", buildJsonObject {
             put("steam_id", buildJsonObject { put("stringValue", steamId) })
+            put("name", buildJsonObject { put("stringValue", name) })
+            put("avatar", buildJsonObject { put("stringValue", avatar) })
+            put("profile", buildJsonObject { put("stringValue", profileUrl) })
             put("joined", buildJsonObject { put("stringValue", now) })
         })
     }
