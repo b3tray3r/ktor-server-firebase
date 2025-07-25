@@ -34,7 +34,6 @@ dependencies {
     implementation("io.ktor:ktor-client-core:$ktorversion")
     implementation("io.ktor:ktor-client-cio:$ktorversion")
     implementation("io.ktor:ktor-client-content-negotiation:$ktorversion")
-    implementation("io.ktor:ktor-client-form:$ktorversion")
 
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationversion")
