@@ -15,8 +15,9 @@ import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.statement.*
 import io.ktor.serialization.kotlinx.json.*
 
-private val PROJECT_ID = "ktor-server-b3tray3r"  // Замените на свой ID из Firebase
-private val BASE_URL = "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents/users"
+private const val PROJECT_ID = "ktor-server-b3tray3r"
+private const val BASE_URL = "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents"
+private const val STEAM_USERS_COLLECTION = "$BASE_URL/steam_users"
 private const val DISCORD_BOT_TOKEN = "Bot MTM5NjE1ODg2OTAyOTI1NzM5Nw.G0f_zf.QPCbWrRAWY5FP9TTUY-BV3y0OVFVeM5mBL2bJc"
 private const val DISCORD_GUILD_ID = "722201462939058317"
 private const val STEAM_API_KEY = "ECCB6C28A6D2DFE42E04E8C770364443"
@@ -32,6 +33,37 @@ data class DiscordGuildData(
     val approximate_member_count: Int? = null,
     val approximate_presence_count: Int? = null
 )
+
+@Serializable
+data class SteamUserProfile(
+    val steamIdData: String,
+    val name: String,
+    val avatar: String,
+    val profile: String
+)
+
+suspend fun getSteamUserFromFirebase(steamId: String): SteamUserProfile? {
+    val response = client.get(STEAM_USERS_COLLECTION)
+    if (response.status != HttpStatusCode.OK) return null
+
+    val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+    val docs = json["documents"]?.jsonArray ?: return null
+
+    for (doc in docs) {
+        val fields = doc.jsonObject["fields"]?.jsonObject ?: continue
+        val sid = fields["steamIdData"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: continue
+        if (sid == steamId) {
+            return SteamUserProfile(
+                steamIdData = sid,
+                name = fields["name"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: "Unknown",
+                avatar = fields["avatar"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: "",
+                profile = fields["profile"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: ""
+            )
+        }
+    }
+
+    return null
+}
 
 suspend fun getDiscordGuildInfo(): DiscordGuildData? {
     return try {
@@ -283,6 +315,17 @@ fun Route.userRoutes() {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to get Discord data"))
         }
     }
+
+    get("/steam/userinfo/{steamId}") {
+        val steamId = call.parameters["steamId"] ?: return@get call.respond(HttpStatusCode.BadRequest, "Steam ID missing")
+        val user = getSteamUserFromFirebase(steamId)
+        if (user == null) {
+            call.respond(HttpStatusCode.NotFound, "Steam user not found")
+        } else {
+            call.respond(user)
+        }
+    }
+
     steamAuthRoutes()
 
 }
