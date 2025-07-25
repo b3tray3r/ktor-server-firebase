@@ -18,6 +18,7 @@ COPY gradle/wrapper /app/gradle/wrapper
 RUN chmod +x gradlew
 
 # Собираем shadowJar
+RUN chmod +x ./gradlew
 RUN ./gradlew shadowJar --no-daemon
 
 # Указываем порт
