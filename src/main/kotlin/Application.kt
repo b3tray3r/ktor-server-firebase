@@ -11,7 +11,7 @@ import io.ktor.server.request.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.http.*
 import io.ktor.server.plugins.statuspages.*
-import io.ktor.server.plugins.calllogging.*
+import io.ktor.server.plugins.callloging.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import io.ktor.server.application.hooks.*
@@ -27,7 +27,8 @@ fun Application.module() {
         allowMethod(HttpMethod.Post)
         allowMethod(HttpMethod.Delete)
         allowMethod(HttpMethod.Options)
-        allowHost("b3tray3r.github.io", schemes = listOf("https"))
+        /* allowHost("b3tray3r.github.io", schemes = listOf("https")) */
+        anyHost()
         allowHeader(HttpHeaders.ContentType)
     }
     install(CallLogging)
