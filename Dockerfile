@@ -16,7 +16,6 @@ COPY gradle/wrapper /app/gradle/wrapper
 
 # Собираем shadowJar
 RUN chmod +x ./gradlew
-RUN ./gradlew shadowJar --no-daemon
 
 # Указываем порт
 EXPOSE 8080
