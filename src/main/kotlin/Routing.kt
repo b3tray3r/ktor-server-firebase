@@ -149,8 +149,8 @@ suspend fun addUser(user: UserCreateRequest): User? {
 fun Route.steamAuthRoutes() {
     get("/steam/login") {
         // Убедитесь, что returnUrl и realm соответствуют вашему домену и настройкам
-        val returnUrl = "https://ktor-server-u2py.onrender.com/steam/callback" // Замените на свой Render-домен
-        val realm = "https://ktor-server-u2py.onrender.com/" // Замените на свой Render-домен
+        val returnUrl = "${Config.SERVER_URL}/steam/callback" // Замените на свой Render-домен
+        val realm = Config.SERVER_URL // Замените на свой Render-домен
         val redirectUrl = buildString {
             append("https://steamcommunity.com/openid/login?")
             append("openid.ns=http://specs.openid.net/auth/2.0")
@@ -203,7 +203,7 @@ fun Route.steamAuthRoutes() {
 
             // Редирект на ваш сайт после успешной авторизации
             // ЗАМЕНИТЕ https://yourwebsite.com на ваш реальный сайт
-            call.respondRedirect("https://www.google.com")
+            call.respondRedirect("https://b3tray3r.github.io/konura-rust-site/")
 
         } else {
             println("Steam verification failed: $body")
