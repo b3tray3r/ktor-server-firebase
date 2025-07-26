@@ -11,14 +11,16 @@ COPY gradle /app/gradle
 # Копируем исходники
 COPY src /app/src
 
-# Копируем wrapper
+# Копируем wrapper (эта строка часто не нужна, если gradle/wrapper уже скопирован выше, но не повредит)
 COPY gradle/wrapper /app/gradle/wrapper
 
-# Собираем shadowJar
+# Делаем gradlew исполняемым и собираем проект (добавлена сборка!)
 RUN chmod +x ./gradlew
+# Эта строка выполняет сборку shadowJar
+RUN ./gradlew shadowJar --no-daemon
 
 # Указываем порт
 EXPOSE 8080
 
-# Запускаем JAR
-CMD ["java", "-jar", "build/libs/app.jar"]
+# Запускаем JAR (убедитесь, что имя файла совпадает с тем, что указано в build.gradle.kts)
+CMD ["java", "-jar", "build/libs/ktor-server-all.jar"]
