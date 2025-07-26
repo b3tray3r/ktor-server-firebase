@@ -37,6 +37,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationversion")
     implementation("ch.qos.logback:logback-classic:$logbackversion")
+    implementation("io.github.cdimascio:dotenv-kotlin:6.4.1")
 
     testImplementation("io.ktor:ktor-server-test-host:$ktorversion")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlinversion")
