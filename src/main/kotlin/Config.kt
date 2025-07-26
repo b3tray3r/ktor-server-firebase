@@ -3,7 +3,7 @@ package com.example
 import io.github.cdimascio.dotenv.dotenv
 
 object Config {
-    private val dotenv = dotenv()
+    private val dotenv = System.getenv()
 
     val PROJECT_ID: String = dotenv["PROJECT_ID"] ?: throw IllegalStateException("PROJECT_ID not found in .env")
     val DISCORD_BOT_TOKEN: String = dotenv["DISCORD_BOT_TOKEN"] ?: throw IllegalStateException("DISCORD_BOT_TOKEN not found in .env")
