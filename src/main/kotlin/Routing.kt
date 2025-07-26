@@ -203,7 +203,7 @@ fun Route.steamAuthRoutes() {
 
             // Редирект на ваш сайт после успешной авторизации
             // ЗАМЕНИТЕ https://yourwebsite.com на ваш реальный сайт
-            call.respondRedirect("https://b3tray3r.github.io/konura-rust-site/")
+            call.respondRedirect("https://b3tray3r.github.io/konura-rust-site/?steamId=$steamId")
 
         } else {
             println("Steam verification failed: $body")
