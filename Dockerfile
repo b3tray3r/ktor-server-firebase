@@ -23,4 +23,4 @@ RUN ./gradlew shadowJar --no-daemon
 EXPOSE 8080
 
 # Запускаем JAR (убедитесь, что имя файла совпадает с тем, что указано в build.gradle.kts)
-CMD ["java", "-jar", "build/libs/ktor-server-all.jar"]
+CMD ["java", "-jar", "build/libs/app.jar"]
