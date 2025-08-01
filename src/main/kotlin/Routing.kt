@@ -203,7 +203,7 @@ fun Route.steamAuthRoutes() {
 
             // Редирект на ваш сайт после успешной авторизации
             // ЗАМЕНИТЕ https://yourwebsite.com на ваш реальный сайт
-            call.respondRedirect("https://b3tray3r.github.io/konura-rust-site/?steamId=$steamId")
+            call.respondRedirect("https://claude-vue-site.onrender.com/?steamId=$steamId")
 
         } else {
             println("Steam verification failed: $body")
@@ -231,6 +231,7 @@ suspend fun saveSteamUser(steamId: String) {
     val avatar = player?.get("avatarfull")?.jsonPrimitive?.content ?: ""
     val profileUrl = player?.get("profileurl")?.jsonPrimitive?.content ?: ""
 
+    // Подготовка данных для Firestore
     // Подготовка данных для Firestore
     val data = buildJsonObject {
         put("fields", buildJsonObject {
