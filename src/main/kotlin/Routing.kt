@@ -23,6 +23,49 @@ private val client = HttpClient(CIO) {
         json()
     }
 }
+
+@Serializable
+data class DiscordGuildData(
+    val approximate_member_count: Int? = null,
+    val approximate_presence_count: Int? = null
+)
+
+@Serializable
+data class SteamUserProfile(
+    val steamIdData: String,
+    val name: String,
+    val avatar: String,
+    val profile: String
+)
+
+@Serializable
+data class RustPlayer(
+    val id: String,
+    val name: String,
+    val ping: String,
+    val connected: String,
+    val ip: String,
+    val ownerSteamID: String
+)
+
+@Serializable
+data class UserCreateRequest(
+    val name: String,
+    val role: String,
+    val gender: String,
+    val age: Int
+)
+
+@Serializable
+data class User(
+    val id: String,
+    val name: String,
+    val role: String,
+    val gender: String,
+    val age: Int
+)
+
+// Новые data классы для RCON ответов
 @Serializable
 data class RconResponse(
     val success: Boolean,
@@ -45,20 +88,29 @@ data class RconDebugResponse(
     val error: String? = null,
     val stack_trace: String? = null
 )
+
+// Новые data классы для парсинга RCON ответа
 @Serializable
-data class DiscordGuildData(
-    val approximate_member_count: Int? = null,
-    val approximate_presence_count: Int? = null
+data class RconServerResponse(
+    val Message: String,
+    val Identifier: Int,
+    val Type: String,
+    val Stacktrace: String
 )
 
 @Serializable
-data class SteamUserProfile(
-    val steamIdData: String,
-    val name: String,
-    val avatar: String,
-    val profile: String
+data class ServerInfo(
+    val hostname: String,
+    val version: String,
+    val map: String,
+    val players: Int,
+    val maxPlayers: Int,
+    val queued: Int,
+    val joining: Int,
+    val playersList: List<RustPlayer>
 )
 
+// Firebase и Steam функции
 suspend fun getSteamUserFromFirebase(steamId: String): SteamUserProfile? {
     val response = client.get(Config.STEAM_USERS_COLLECTION)
     if (response.status != HttpStatusCode.OK) return null
@@ -83,7 +135,7 @@ suspend fun getDiscordGuildInfo(): DiscordGuildData? {
     return try {
         val response = client.get("https://discord.com/api/v10/guilds/${Config.DISCORD_GUILD_ID}?with_counts=true") {
             headers {
-                append("Authorization", "Bot ${Config.DISCORD_BOT_TOKEN}") // Добавлен префикс Bot
+                append("Authorization", "Bot ${Config.DISCORD_BOT_TOKEN}")
             }
         }
         if (response.status == HttpStatusCode.OK) {
@@ -97,40 +149,12 @@ suspend fun getDiscordGuildInfo(): DiscordGuildData? {
             null
         }
     } catch (e: Exception) {
-        println("Discord API error: ${e.message}")
+        e.printStackTrace()
         null
     }
 }
 
-@Serializable
-data class RustPlayer(
-    val id: String,
-    val name: String,
-    val ping: String,
-    val connected: String,
-    val ip: String,
-    val ownerSteamID: String
-)
-
-
-@Serializable
-data class UserCreateRequest(
-    val name: String,
-    val role: String,
-    val gender: String,
-    val age: Int
-)
-
-@Serializable
-data class User(
-    val id: String,
-    val name: String,
-    val role: String,
-    val gender: String,
-    val age: Int
-)
-
-// Парсим документ Firestore в User
+// Функции для работы с пользователями
 fun parseUser(doc: JsonObject): User {
     val fields = doc["fields"]!!.jsonObject
     return User(
@@ -180,11 +204,11 @@ suspend fun addUser(user: UserCreateRequest): User? {
     return parseUser(json)
 }
 
+// Steam авторизация
 fun Route.steamAuthRoutes() {
     get("/steam/login") {
-        // Убедитесь, что returnUrl и realm соответствуют вашему домену и настройкам
-        val returnUrl = "${Config.SERVER_URL}/steam/callback" // Замените на свой Render-домен
-        val realm = Config.SERVER_URL // Замените на свой Render-домен
+        val returnUrl = "${Config.SERVER_URL}/steam/callback"
+        val realm = Config.SERVER_URL
         val redirectUrl = buildString {
             append("https://steamcommunity.com/openid/login?")
             append("openid.ns=http://specs.openid.net/auth/2.0")
@@ -201,7 +225,6 @@ fun Route.steamAuthRoutes() {
         val params = call.request.queryParameters
         val steamOpenIdUrl = "https://steamcommunity.com/openid/login"
 
-        // Проверка параметров
         val assocHandle = params["openid.assoc_handle"] ?: return@get call.respondText("Missing assoc_handle")
         val signed = params["openid.signed"] ?: return@get call.respondText("Missing signed")
         val sig = params["openid.sig"] ?: return@get call.respondText("Missing sig")
@@ -226,17 +249,11 @@ fun Route.steamAuthRoutes() {
             val claimedId = params["openid.claimed_id"]
             val steamId = claimedId?.substringAfterLast("/") ?: return@get call.respondText("Steam ID не найден")
 
-            // Проверка существования пользователя в Firestore
             val exists = checkIfSteamUserExists(steamId)
             if (!exists) {
                 saveSteamUser(steamId)
-            } else {
-                // Если пользователь существует, можно обновить данные (по желанию)
-                // updateSteamUser(steamId) // Реализуйте эту функцию при необходимости
             }
 
-            // Редирект на ваш сайт после успешной авторизации
-            // ЗАМЕНИТЕ https://yourwebsite.com на ваш реальный сайт
             call.respondRedirect("https://konurarust.com/?steamId=$steamId")
 
         } else {
@@ -247,7 +264,7 @@ fun Route.steamAuthRoutes() {
 }
 
 suspend fun checkIfSteamUserExists(steamId: String): Boolean {
-    val response = client.get("${Config.STEAM_USERS_COLLECTION}/$steamId") // Проверка конкретного документа
+    val response = client.get("${Config.STEAM_USERS_COLLECTION}/$steamId")
     return response.status == HttpStatusCode.OK
 }
 
@@ -255,7 +272,6 @@ suspend fun saveSteamUser(steamId: String) {
     val apiKey = Config.STEAM_API_KEY
     val now = Clock.System.now().toString()
 
-    // Получение данных из Steam API
     val response = client.get("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=$apiKey&steamids=$steamId")
     val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
     val player = json["response"]?.jsonObject
@@ -265,11 +281,9 @@ suspend fun saveSteamUser(steamId: String) {
     val avatar = player?.get("avatarfull")?.jsonPrimitive?.content ?: ""
     val profileUrl = player?.get("profileurl")?.jsonPrimitive?.content ?: ""
 
-    // Подготовка данных для Firestore
-    // Подготовка данных для Firestore
     val data = buildJsonObject {
         put("fields", buildJsonObject {
-            put("steamIdData", buildJsonObject { put("stringValue", steamId) }) // Используем steamIdData как в других частях
+            put("steamIdData", buildJsonObject { put("stringValue", steamId) })
             put("name", buildJsonObject { put("stringValue", name) })
             put("avatar", buildJsonObject { put("stringValue", avatar) })
             put("profile", buildJsonObject { put("stringValue", profileUrl) })
@@ -277,8 +291,6 @@ suspend fun saveSteamUser(steamId: String) {
         })
     }
 
-    // Используем PATCH для обновления/создания документа с ID = steamId
-    // Это предотвращает дублирование, так как документ будет иметь ID steamId
     try {
         val patchResponse = client.patch("${Config.STEAM_USERS_COLLECTION}/$steamId") {
             contentType(ContentType.Application.Json)
@@ -294,8 +306,200 @@ suspend fun saveSteamUser(steamId: String) {
         e.printStackTrace()
     }
 }
+
+// Обновленные функции парсинга RCON
+fun extractPlayersBlock(jsonResponse: String): String {
+    return try {
+        val rconResponse = Json.decodeFromString<RconServerResponse>(jsonResponse)
+        val message = rconResponse.Message
+
+        val startIndex = message.indexOf("id                name")
+        if (startIndex == -1) {
+            println("Players header not found in message")
+            return ""
+        }
+
+        val playersSection = message.substring(startIndex).trim()
+        println("Extracted players section: '$playersSection'")
+        return playersSection
+
+    } catch (e: Exception) {
+        println("Error parsing RCON JSON response: ${e.message}")
+        return ""
+    }
+}
+
+fun parsePlayerLine(line: String): RustPlayer? {
+    val trimmedLine = line.trim()
+
+    if (trimmedLine.isEmpty() || trimmedLine.startsWith("id                name")) {
+        return null
+    }
+
+    println("Parsing line: '$trimmedLine'")
+
+    val regex = Regex("""(\S+)\s+"([^"]+)"\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)""")
+    val matchResult = regex.find(trimmedLine)
+
+    return if (matchResult != null) {
+        val groups = matchResult.groupValues
+        RustPlayer(
+            id = groups[1],
+            name = groups[2],
+            ping = groups[3],
+            connected = groups[4],
+            ip = groups[5],
+            ownerSteamID = groups[1]
+        )
+    } else {
+        println("Failed to parse player line: '$trimmedLine'")
+        null
+    }
+}
+
+fun parsePlayers(block: String): List<RustPlayer> {
+    val lines = block.lines()
+    val players = mutableListOf<RustPlayer>()
+
+    for (line in lines) {
+        val player = parsePlayerLine(line)
+        if (player != null) {
+            players.add(player)
+            println("Parsed player: ${player.name} (${player.id})")
+        }
+    }
+
+    println("Total players parsed: ${players.size}")
+    return players
+}
+
+fun parseServerInfo(jsonResponse: String): ServerInfo? {
+    return try {
+        val rconResponse = Json.decodeFromString<RconServerResponse>(jsonResponse)
+        val message = rconResponse.Message
+
+        val lines = message.lines()
+        var hostname = ""
+        var version = ""
+        var map = ""
+        var players = 0
+        var maxPlayers = 0
+        var queued = 0
+        var joining = 0
+
+        for (line in lines) {
+            when {
+                line.startsWith("hostname:") -> {
+                    hostname = line.substringAfter("hostname:").trim()
+                }
+                line.startsWith("version :") -> {
+                    version = line.substringAfter("version :").trim()
+                }
+                line.startsWith("map     :") -> {
+                    map = line.substringAfter("map     :").trim()
+                }
+                line.startsWith("players :") -> {
+                    val playerInfo = line.substringAfter("players :").trim()
+                    val regex = Regex("""(\d+) \((\d+) max\) \((\d+) queued\) \((\d+) joining\)""")
+                    val matchResult = regex.find(playerInfo)
+                    if (matchResult != null) {
+                        players = matchResult.groupValues[1].toInt()
+                        maxPlayers = matchResult.groupValues[2].toInt()
+                        queued = matchResult.groupValues[3].toInt()
+                        joining = matchResult.groupValues[4].toInt()
+                    }
+                }
+            }
+        }
+
+        val playersBlock = extractPlayersBlock(jsonResponse)
+        val playersList = parsePlayers(playersBlock)
+
+        ServerInfo(
+            hostname = hostname,
+            version = version,
+            map = map,
+            players = players,
+            maxPlayers = maxPlayers,
+            queued = queued,
+            joining = joining,
+            playersList = playersList
+        )
+
+    } catch (e: Exception) {
+        println("Error parsing server info: ${e.message}")
+        e.printStackTrace()
+        null
+    }
+}
+
+suspend fun savePlayersToFirebase(players: List<RustPlayer>) {
+    for (player in players) {
+        val docUrl = "${Config.RUST_PLAYERS_COLLECTION}/${player.id}"
+        val getResponse = client.get(docUrl)
+
+        if (getResponse.status == HttpStatusCode.OK) {
+            val updateBody = buildJsonObject {
+                put("fields", buildJsonObject {
+                    put("name", buildJsonObject {
+                        put("arrayValue", buildJsonObject {
+                            put("values", buildJsonArray {
+                                addJsonObject { put("stringValue", player.name) }
+                            })
+                        })
+                    })
+                })
+            }
+            client.patch(docUrl) {
+                contentType(ContentType.Application.Json)
+                setBody(updateBody)
+            }
+        } else {
+            val createBody = buildJsonObject {
+                put("fields", buildJsonObject {
+                    put("name", buildJsonObject {
+                        put("arrayValue", buildJsonObject {
+                            put("values", buildJsonArray {
+                                addJsonObject { put("stringValue", player.name) }
+                            })
+                        })
+                    })
+                    put("createdAt", buildJsonObject {
+                        put("timestampValue", Clock.System.now().toString())
+                    })
+                })
+            }
+            client.patch(docUrl) {
+                contentType(ContentType.Application.Json)
+                setBody(createBody)
+            }
+        }
+    }
+}
+
+// RCON роуты
 fun Route.rconRoutes() {
     get("/rcon/fetch") {
+        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
+
+        try {
+            val client = RconClient("203.16.163.232", 28836, rconPassword)
+            val rawResponse = client.connectAndFetchStatus()
+
+            val playersBlock = extractPlayersBlock(rawResponse)
+            val players = parsePlayers(playersBlock)
+            savePlayersToFirebase(players)
+
+            call.respond(players)
+
+        } catch (e: Exception) {
+            println("RCON Error: ${e.message}")
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
+        }
+    }
+
+    get("/rcon/debug") {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
             HttpStatusCode.InternalServerError,
             RconResponse(success = false, error = "No RCON_PASSWORD")
@@ -305,13 +509,6 @@ fun Route.rconRoutes() {
             val client = RconClient("203.16.163.232", 28836, rconPassword)
             val rawResponse = client.connectAndFetchStatus()
 
-            // Логируем полный ответ для отладки
-            println("=== FULL RCON RESPONSE ===")
-            println("Length: ${rawResponse.length}")
-            println("Response: '$rawResponse'")
-            println("=========================")
-
-            // Возвращаем сырой ответ вместо парсинга
             call.respond(RconResponse(
                 success = true,
                 raw_response = rawResponse,
@@ -331,51 +528,40 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Добавим дополнительный эндпоинт для тестирования парсинга
-    get("/rcon/debug") {
+    get("/rcon/server-info") {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
             HttpStatusCode.InternalServerError,
-            RconDebugResponse(
-                raw_response = "",
-                players_block = "",
-                players_block_length = 0,
-                parsed_players = emptyList(),
-                players_count = 0,
-                raw_lines = emptyList(),
-                block_lines = emptyList(),
-                error = "No RCON_PASSWORD"
-            )
+            RconResponse(success = false, error = "No RCON_PASSWORD")
         )
 
         try {
             val client = RconClient("203.16.163.232", 28836, rconPassword)
             val rawResponse = client.connectAndFetchStatus()
 
-            // Показываем весь процесс парсинга пошагово
-            val playersBlock = extractPlayersBlock(rawResponse)
-            val players = parsePlayers(playersBlock)
+            val serverInfo = parseServerInfo(rawResponse)
 
-            call.respond(RconDebugResponse(
-                raw_response = rawResponse,
-                players_block = playersBlock,
-                players_block_length = playersBlock.length,
-                parsed_players = players,
-                players_count = players.size,
-                raw_lines = rawResponse.lines(),
-                block_lines = playersBlock.lines()
-            ))
+            if (serverInfo != null) {
+                call.respond(serverInfo)
+
+                if (serverInfo.playersList.isNotEmpty()) {
+                    savePlayersToFirebase(serverInfo.playersList)
+                    println("✅ Saved ${serverInfo.playersList.size} players to Firebase")
+                }
+            } else {
+                call.respond(HttpStatusCode.InternalServerError, RconResponse(
+                    success = false,
+                    error = "Failed to parse server info"
+                ))
+            }
 
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, RconDebugResponse(
-                raw_response = "",
-                players_block = "",
-                players_block_length = 0,
-                parsed_players = emptyList(),
-                players_count = 0,
-                raw_lines = emptyList(),
-                block_lines = emptyList(),
+            println("RCON Error: ${e.message}")
+            e.printStackTrace()
+
+            call.respond(HttpStatusCode.InternalServerError, RconResponse(
+                success = false,
                 error = e.message,
-                stack_trace = e.stackTraceToString()
+                error_type = e.javaClass.simpleName
             ))
         }
     }
@@ -400,78 +586,7 @@ fun Application.scheduleRconTask() {
     }
 }
 
-
-fun extractPlayersBlock(text: String): String {
-    val startIndex = text.indexOf("id name")
-    if (startIndex == -1) return ""
-    return text.substring(startIndex).trim()
-}
-
-fun parsePlayerLine(line: String): RustPlayer? {
-    val parts = line.trim().split(Regex("\\s+"))
-    if (parts.size < 8) return null
-    return RustPlayer(
-        id = parts[0],
-        name = parts.slice(1 until parts.size - 6).joinToString(" "),
-        ping = parts[parts.size - 6],
-        connected = parts[parts.size - 5],
-        ip = parts[parts.size - 2],
-        ownerSteamID = parts.last()
-    )
-}
-
-fun parsePlayers(block: String): List<RustPlayer> {
-    val lines = block.lines().drop(1) // убираем заголовок
-    return lines.mapNotNull { parsePlayerLine(it) }
-}
-suspend fun savePlayersToFirebase(players: List<RustPlayer>) {
-    for (player in players) {
-        val docUrl = "${Config.RUST_PLAYERS_COLLECTION}/${player.id}"
-        val getResponse = client.get(docUrl)
-
-        if (getResponse.status == HttpStatusCode.OK) {
-            // Документ уже есть — обновляем name (добавляем, если нет в массиве)
-            val updateBody = buildJsonObject {
-                put("fields", buildJsonObject {
-                    put("name", buildJsonObject {
-                        put("arrayValue", buildJsonObject {
-                            put("values", buildJsonArray {
-                                addJsonObject { put("stringValue", player.name) }
-                            })
-                        })
-                    })
-                })
-            }
-            client.patch(docUrl) {
-                contentType(ContentType.Application.Json)
-                setBody(updateBody)
-            }
-        } else {
-            // Документа нет — создаём
-            val createBody = buildJsonObject {
-                put("fields", buildJsonObject {
-                    put("name", buildJsonObject {
-                        put("arrayValue", buildJsonObject {
-                            put("values", buildJsonArray {
-                                addJsonObject { put("stringValue", player.name) }
-                            })
-                        })
-                    })
-                    put("createdAt", buildJsonObject {
-                        put("timestampValue", Clock.System.now().toString())
-                    })
-                })
-            }
-            client.patch(docUrl) {
-                contentType(ContentType.Application.Json)
-                setBody(createBody)
-            }
-        }
-    }
-}
-
-
-
+// Пользовательские роуты
 fun Route.userRoutes() {
     get("/") {
         val users = getAllUsers()
