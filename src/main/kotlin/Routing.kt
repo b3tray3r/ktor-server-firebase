@@ -23,7 +23,28 @@ private val client = HttpClient(CIO) {
         json()
     }
 }
+@Serializable
+data class RconResponse(
+    val success: Boolean,
+    val raw_response: String? = null,
+    val response_length: Int? = null,
+    val response_lines: Int? = null,
+    val error: String? = null,
+    val error_type: String? = null
+)
 
+@Serializable
+data class RconDebugResponse(
+    val raw_response: String,
+    val players_block: String,
+    val players_block_length: Int,
+    val parsed_players: List<RustPlayer>,
+    val players_count: Int,
+    val raw_lines: List<String>,
+    val block_lines: List<String>,
+    val error: String? = null,
+    val stack_trace: String? = null
+)
 @Serializable
 data class DiscordGuildData(
     val approximate_member_count: Int? = null,
@@ -275,7 +296,10 @@ suspend fun saveSteamUser(steamId: String) {
 }
 fun Route.rconRoutes() {
     get("/rcon/fetch") {
-        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
+        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
+            HttpStatusCode.InternalServerError,
+            RconResponse(success = false, error = "No RCON_PASSWORD")
+        )
 
         try {
             val client = RconClient("203.16.163.232", 28836, rconPassword)
@@ -288,28 +312,40 @@ fun Route.rconRoutes() {
             println("=========================")
 
             // Возвращаем сырой ответ вместо парсинга
-            call.respond(mapOf(
-                "success" to true,
-                "raw_response" to rawResponse,
-                "response_length" to rawResponse.length,
-                "response_lines" to rawResponse.lines().size
+            call.respond(RconResponse(
+                success = true,
+                raw_response = rawResponse,
+                response_length = rawResponse.length,
+                response_lines = rawResponse.lines().size
             ))
 
         } catch (e: Exception) {
             println("RCON Error: ${e.message}")
             e.printStackTrace()
 
-            call.respond(HttpStatusCode.InternalServerError, mapOf(
-                "success" to false,
-                "error" to e.message,
-                "error_type" to e.javaClass.simpleName
+            call.respond(HttpStatusCode.InternalServerError, RconResponse(
+                success = false,
+                error = e.message,
+                error_type = e.javaClass.simpleName
             ))
         }
     }
 
     // Добавим дополнительный эндпоинт для тестирования парсинга
     get("/rcon/debug") {
-        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
+        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
+            HttpStatusCode.InternalServerError,
+            RconDebugResponse(
+                raw_response = "",
+                players_block = "",
+                players_block_length = 0,
+                parsed_players = emptyList(),
+                players_count = 0,
+                raw_lines = emptyList(),
+                block_lines = emptyList(),
+                error = "No RCON_PASSWORD"
+            )
+        )
 
         try {
             val client = RconClient("203.16.163.232", 28836, rconPassword)
@@ -319,20 +355,27 @@ fun Route.rconRoutes() {
             val playersBlock = extractPlayersBlock(rawResponse)
             val players = parsePlayers(playersBlock)
 
-            call.respond(mapOf(
-                "raw_response" to rawResponse,
-                "players_block" to playersBlock,
-                "players_block_length" to playersBlock.length,
-                "parsed_players" to players,
-                "players_count" to players.size,
-                "raw_lines" to rawResponse.lines(),
-                "block_lines" to playersBlock.lines()
+            call.respond(RconDebugResponse(
+                raw_response = rawResponse,
+                players_block = playersBlock,
+                players_block_length = playersBlock.length,
+                parsed_players = players,
+                players_count = players.size,
+                raw_lines = rawResponse.lines(),
+                block_lines = playersBlock.lines()
             ))
 
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, mapOf(
-                "error" to e.message,
-                "stack_trace" to e.stackTraceToString()
+            call.respond(HttpStatusCode.InternalServerError, RconDebugResponse(
+                raw_response = "",
+                players_block = "",
+                players_block_length = 0,
+                parsed_players = emptyList(),
+                players_count = 0,
+                raw_lines = emptyList(),
+                block_lines = emptyList(),
+                error = e.message,
+                stack_trace = e.stackTraceToString()
             ))
         }
     }
