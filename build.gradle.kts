@@ -30,7 +30,8 @@ dependencies {
     implementation("io.ktor:ktor-server-status-pages:$ktorversion")
     implementation("io.ktor:ktor-server-call-logging:$ktorversion")
     implementation("io.ktor:ktor-server-cors:$ktorversion")
-
+    implementation("io.ktor:ktor-client-websockets:2.3.4")
+    implementation("org.java-websocket:Java-WebSocket:1.5.3")
     implementation("io.ktor:ktor-client-core:$ktorversion")
     implementation("io.ktor:ktor-client-cio:$ktorversion")
     implementation("io.ktor:ktor-client-content-negotiation:$ktorversion")

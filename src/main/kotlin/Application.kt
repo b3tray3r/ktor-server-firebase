@@ -40,8 +40,9 @@ fun Application.module() {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (cause.message ?: "Unknown error")))
         }
     }
-
+    scheduleRconTask()
     routing {
         userRoutes()
+        rconRoutes()
     }
 }

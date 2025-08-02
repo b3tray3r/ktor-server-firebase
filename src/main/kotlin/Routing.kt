@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.rcon.RconClient
 import io.ktor.server.routing.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -14,6 +15,7 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.statement.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.*
 import kotlinx.datetime.Clock
 
 private val client = HttpClient(CIO) {
@@ -74,10 +76,21 @@ suspend fun getDiscordGuildInfo(): DiscordGuildData? {
             null
         }
     } catch (e: Exception) {
-        e.printStackTrace()
+        println("Discord API error: ${e.message}")
         null
     }
 }
+
+@Serializable
+data class RustPlayer(
+    val id: String,
+    val name: String,
+    val ping: String,
+    val connected: String,
+    val ip: String,
+    val ownerSteamID: String
+)
+
 
 @Serializable
 data class UserCreateRequest(
@@ -260,6 +273,109 @@ suspend fun saveSteamUser(steamId: String) {
         e.printStackTrace()
     }
 }
+fun Route.rconRoutes() {
+    get("/rcon/fetch") {
+        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
+        val client = RconClient("203.16.163.232", 28836, rconPassword)
+        val rawResponse = client.connectAndFetchStatus()
+
+        val block = extractPlayersBlock(rawResponse)
+        val players = parsePlayers(block)
+        savePlayersToFirebase(players)
+
+        call.respond(players)
+    }
+}
+
+fun Application.scheduleRconTask() {
+    val rconPassword = System.getenv("RCON_PASSWORD") ?: return
+    launch {
+        while (true) {
+            delay(60 * 60 * 1000)
+            try {
+                val client = RconClient("203.16.163.232", 28836, rconPassword)
+                val rawResponse = client.connectAndFetchStatus()
+                val block = extractPlayersBlock(rawResponse)
+                val players = parsePlayers(block)
+                savePlayersToFirebase(players)
+                println("✅ [RCON] Players saved: ${players.size}")
+            } catch (e: Exception) {
+                println("❌ [RCON ERROR] ${e.message}")
+            }
+        }
+    }
+}
+
+
+fun extractPlayersBlock(text: String): String {
+    val startIndex = text.indexOf("id name")
+    if (startIndex == -1) return ""
+    return text.substring(startIndex).trim()
+}
+
+fun parsePlayerLine(line: String): RustPlayer? {
+    val parts = line.trim().split(Regex("\\s+"))
+    if (parts.size < 8) return null
+    return RustPlayer(
+        id = parts[0],
+        name = parts.slice(1 until parts.size - 6).joinToString(" "),
+        ping = parts[parts.size - 6],
+        connected = parts[parts.size - 5],
+        ip = parts[parts.size - 2],
+        ownerSteamID = parts.last()
+    )
+}
+
+fun parsePlayers(block: String): List<RustPlayer> {
+    val lines = block.lines().drop(1) // убираем заголовок
+    return lines.mapNotNull { parsePlayerLine(it) }
+}
+suspend fun savePlayersToFirebase(players: List<RustPlayer>) {
+    for (player in players) {
+        val docUrl = "${Config.RUST_PLAYERS_COLLECTION}/${player.id}"
+        val getResponse = client.get(docUrl)
+
+        if (getResponse.status == HttpStatusCode.OK) {
+            // Документ уже есть — обновляем name (добавляем, если нет в массиве)
+            val updateBody = buildJsonObject {
+                put("fields", buildJsonObject {
+                    put("name", buildJsonObject {
+                        put("arrayValue", buildJsonObject {
+                            put("values", buildJsonArray {
+                                addJsonObject { put("stringValue", player.name) }
+                            })
+                        })
+                    })
+                })
+            }
+            client.patch(docUrl) {
+                contentType(ContentType.Application.Json)
+                setBody(updateBody)
+            }
+        } else {
+            // Документа нет — создаём
+            val createBody = buildJsonObject {
+                put("fields", buildJsonObject {
+                    put("name", buildJsonObject {
+                        put("arrayValue", buildJsonObject {
+                            put("values", buildJsonArray {
+                                addJsonObject { put("stringValue", player.name) }
+                            })
+                        })
+                    })
+                    put("createdAt", buildJsonObject {
+                        put("timestampValue", Clock.System.now().toString())
+                    })
+                })
+            }
+            client.patch(docUrl) {
+                contentType(ContentType.Application.Json)
+                setBody(createBody)
+            }
+        }
+    }
+}
+
 
 
 fun Route.userRoutes() {
