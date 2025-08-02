@@ -316,16 +316,16 @@ fun extractPlayersBlock(jsonResponse: String): String {
         val startIndex = message.indexOf("id                name")
         if (startIndex == -1) {
             println("Players header not found in message")
-            return ""
+            ""
+        } else {
+            val playersSection = message.substring(startIndex).trim()
+            println("Extracted players section: '$playersSection'")
+            playersSection
         }
-
-        val playersSection = message.substring(startIndex).trim()
-        println("Extracted players section: '$playersSection'")
-        return playersSection
 
     } catch (e: Exception) {
         println("Error parsing RCON JSON response: ${e.message}")
-        return ""
+        ""
     }
 }
 
@@ -477,6 +477,101 @@ suspend fun savePlayersToFirebase(players: List<RustPlayer>) {
     }
 }
 
+// Новая функция для сохранения детальных данных игроков в rust_player_data
+suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
+    val now = Clock.System.now().toString()
+
+    for (player in players) {
+        try {
+            val docUrl = "${Config.RUST_PLAYER_DATA_COLLECTION}/${player.id}"
+            val getResponse = client.get(docUrl)
+
+            if (getResponse.status == HttpStatusCode.OK) {
+                // Документ существует - добавляем новую сессию в историю
+                val existingDoc = Json.parseToJsonElement(getResponse.bodyAsText()).jsonObject
+                val fields = existingDoc["fields"]?.jsonObject
+                val existingSessions = fields?.get("sessions")?.jsonObject?.get("arrayValue")?.jsonObject?.get("values")?.jsonArray ?: buildJsonArray {}
+
+                // Создаем новую сессию
+                val newSession = buildJsonObject {
+                    put("mapValue", buildJsonObject {
+                        put("fields", buildJsonObject {
+                            put("name", buildJsonObject { put("stringValue", player.name) })
+                            put("ping", buildJsonObject { put("stringValue", player.ping) })
+                            put("connected", buildJsonObject { put("stringValue", player.connected) })
+                            put("ip", buildJsonObject { put("stringValue", player.ip) })
+                            put("timestamp", buildJsonObject { put("timestampValue", now) })
+                        })
+                    })
+                }
+
+                // Добавляем новую сессию к существующим
+                val updatedSessions = buildJsonArray {
+                    existingSessions.forEach { add(it) }
+                    add(newSession)
+                }
+
+                val updateBody = buildJsonObject {
+                    put("fields", buildJsonObject {
+                        put("steamId", buildJsonObject { put("stringValue", player.id) })
+                        put("currentName", buildJsonObject { put("stringValue", player.name) })
+                        put("lastSeen", buildJsonObject { put("timestampValue", now) })
+                        put("sessions", buildJsonObject {
+                            put("arrayValue", buildJsonObject {
+                                put("values", updatedSessions)
+                            })
+                        })
+                    })
+                }
+
+                client.patch(docUrl) {
+                    contentType(ContentType.Application.Json)
+                    setBody(updateBody)
+                }
+
+            } else {
+                // Документ не существует - создаем новый
+                val createBody = buildJsonObject {
+                    put("fields", buildJsonObject {
+                        put("steamId", buildJsonObject { put("stringValue", player.id) })
+                        put("currentName", buildJsonObject { put("stringValue", player.name) })
+                        put("firstSeen", buildJsonObject { put("timestampValue", now) })
+                        put("lastSeen", buildJsonObject { put("timestampValue", now) })
+                        put("sessions", buildJsonObject {
+                            put("arrayValue", buildJsonObject {
+                                put("values", buildJsonArray {
+                                    addJsonObject {
+                                        put("mapValue", buildJsonObject {
+                                            put("fields", buildJsonObject {
+                                                put("name", buildJsonObject { put("stringValue", player.name) })
+                                                put("ping", buildJsonObject { put("stringValue", player.ping) })
+                                                put("connected", buildJsonObject { put("stringValue", player.connected) })
+                                                put("ip", buildJsonObject { put("stringValue", player.ip) })
+                                                put("timestamp", buildJsonObject { put("timestampValue", now) })
+                                            })
+                                        })
+                                    }
+                                })
+                            })
+                        })
+                    })
+                }
+
+                client.patch(docUrl) {
+                    contentType(ContentType.Application.Json)
+                    setBody(createBody)
+                }
+            }
+
+            println("✅ Saved player data: ${player.name} (${player.id})")
+
+        } catch (e: Exception) {
+            println("❌ Error saving player data for ${player.name}: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+}
+
 // RCON роуты
 fun Route.rconRoutes() {
     get("/rcon/fetch") {
@@ -544,8 +639,10 @@ fun Route.rconRoutes() {
                 call.respond(serverInfo)
 
                 if (serverInfo.playersList.isNotEmpty()) {
-                    savePlayersToFirebase(serverInfo.playersList)
-                    println("✅ Saved ${serverInfo.playersList.size} players to Firebase")
+                    // Сохраняем в обе коллекции
+                    savePlayersToFirebase(serverInfo.playersList) // Старая коллекция
+                    savePlayersDataToFirebase(serverInfo.playersList) // Новая детальная коллекция
+                    println("✅ Saved ${serverInfo.playersList.size} players to both collections")
                 }
             } else {
                 call.respond(HttpStatusCode.InternalServerError, RconResponse(
@@ -571,16 +668,20 @@ fun Application.scheduleRconTask() {
     val rconPassword = System.getenv("RCON_PASSWORD") ?: return
     launch {
         while (true) {
-            delay(60 * 60 * 1000)
+            delay(60 * 60 * 1000) // Каждый час
             try {
                 val client = RconClient("203.16.163.232", 28836, rconPassword)
                 val rawResponse = client.connectAndFetchStatus()
                 val block = extractPlayersBlock(rawResponse)
                 val players = parsePlayers(block)
-                savePlayersToFirebase(players)
-                println("✅ [RCON] Players saved: ${players.size}")
+
+                // Сохраняем в обе коллекции
+                savePlayersToFirebase(players) // Старая коллекция
+                savePlayersDataToFirebase(players) // Новая детальная коллекция
+
+                println("✅ [RCON SCHEDULER] Players saved: ${players.size}")
             } catch (e: Exception) {
-                println("❌ [RCON ERROR] ${e.message}")
+                println("❌ [RCON SCHEDULER ERROR] ${e.message}")
             }
         }
     }
