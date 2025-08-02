@@ -203,7 +203,7 @@ fun Route.steamAuthRoutes() {
 
             // Редирект на ваш сайт после успешной авторизации
             // ЗАМЕНИТЕ https://yourwebsite.com на ваш реальный сайт
-            call.respondRedirect("https://claude-vue-site.onrender.com/?steamId=$steamId")
+            call.respondRedirect("https://konurarust.com/?steamId=$steamId")
 
         } else {
             println("Steam verification failed: $body")
