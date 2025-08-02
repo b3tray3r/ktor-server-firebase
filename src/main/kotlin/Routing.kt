@@ -276,14 +276,65 @@ suspend fun saveSteamUser(steamId: String) {
 fun Route.rconRoutes() {
     get("/rcon/fetch") {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
-        val client = RconClient("203.16.163.232", 28836, rconPassword)
-        val rawResponse = client.connectAndFetchStatus()
 
-        val block = extractPlayersBlock(rawResponse)
-        val players = parsePlayers(block)
-        savePlayersToFirebase(players)
+        try {
+            val client = RconClient("203.16.163.232", 28836, rconPassword)
+            val rawResponse = client.connectAndFetchStatus()
 
-        call.respond(players)
+            // Логируем полный ответ для отладки
+            println("=== FULL RCON RESPONSE ===")
+            println("Length: ${rawResponse.length}")
+            println("Response: '$rawResponse'")
+            println("=========================")
+
+            // Возвращаем сырой ответ вместо парсинга
+            call.respond(mapOf(
+                "success" to true,
+                "raw_response" to rawResponse,
+                "response_length" to rawResponse.length,
+                "response_lines" to rawResponse.lines().size
+            ))
+
+        } catch (e: Exception) {
+            println("RCON Error: ${e.message}")
+            e.printStackTrace()
+
+            call.respond(HttpStatusCode.InternalServerError, mapOf(
+                "success" to false,
+                "error" to e.message,
+                "error_type" to e.javaClass.simpleName
+            ))
+        }
+    }
+
+    // Добавим дополнительный эндпоинт для тестирования парсинга
+    get("/rcon/debug") {
+        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
+
+        try {
+            val client = RconClient("203.16.163.232", 28836, rconPassword)
+            val rawResponse = client.connectAndFetchStatus()
+
+            // Показываем весь процесс парсинга пошагово
+            val playersBlock = extractPlayersBlock(rawResponse)
+            val players = parsePlayers(playersBlock)
+
+            call.respond(mapOf(
+                "raw_response" to rawResponse,
+                "players_block" to playersBlock,
+                "players_block_length" to playersBlock.length,
+                "parsed_players" to players,
+                "players_count" to players.size,
+                "raw_lines" to rawResponse.lines(),
+                "block_lines" to playersBlock.lines()
+            ))
+
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf(
+                "error" to e.message,
+                "stack_trace" to e.stackTraceToString()
+            ))
+        }
     }
 }
 

@@ -24,7 +24,9 @@ class RconClient(
                 }
 
                 override fun onMessage(message: String?) {
-                    println("Received message: $message")
+                    println("Received message length: ${message?.length}")
+                    println("Received message: '$message'")
+                    println("Message bytes: ${message?.toByteArray()?.joinToString { it.toString() }}")
                     if (message != null && !response.isCompleted) {
                         response.complete(message)
                         close()
