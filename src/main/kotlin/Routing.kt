@@ -574,6 +574,7 @@ suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
 
 // RCON роуты
 fun Route.rconRoutes() {
+    // Только получение данных игроков (без записи в БД)
     get("/rcon/fetch") {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
 
@@ -583,7 +584,6 @@ fun Route.rconRoutes() {
 
             val playersBlock = extractPlayersBlock(rawResponse)
             val players = parsePlayers(playersBlock)
-            savePlayersToFirebase(players)
 
             call.respond(players)
 
@@ -594,6 +594,7 @@ fun Route.rconRoutes() {
         }
     }
 
+    // Отладочный эндпоинт для просмотра сырого ответа
     get("/rcon/debug") {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
             HttpStatusCode.InternalServerError,
@@ -623,6 +624,7 @@ fun Route.rconRoutes() {
         }
     }
 
+    // Только получение информации о сервере (без записи в БД)
     get("/rcon/server-info") {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
             HttpStatusCode.InternalServerError,
@@ -637,13 +639,91 @@ fun Route.rconRoutes() {
 
             if (serverInfo != null) {
                 call.respond(serverInfo)
+            } else {
+                call.respond(HttpStatusCode.InternalServerError, RconResponse(
+                    success = false,
+                    error = "Failed to parse server info"
+                ))
+            }
 
+        } catch (e: Exception) {
+            println("RCON Error: ${e.message}")
+            e.printStackTrace()
+
+            call.respond(HttpStatusCode.InternalServerError, RconResponse(
+                success = false,
+                error = e.message,
+                error_type = e.javaClass.simpleName
+            ))
+        }
+    }
+
+    // Новый эндпоинт для записи данных игроков в БД
+    post("/rcon/save-players") {
+        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@post call.respond(
+            HttpStatusCode.InternalServerError,
+            RconResponse(success = false, error = "No RCON_PASSWORD")
+        )
+
+        try {
+            val client = RconClient("203.16.163.232", 28836, rconPassword)
+            val rawResponse = client.connectAndFetchStatus()
+
+            val playersBlock = extractPlayersBlock(rawResponse)
+            val players = parsePlayers(playersBlock)
+
+            if (players.isNotEmpty()) {
+                // Сохраняем в обе коллекции
+                savePlayersToFirebase(players) // Старая коллекция
+                savePlayersDataToFirebase(players) // Новая детальная коллекция
+
+                call.respond(RconResponse(
+                    success = true,
+                    error = "Successfully saved ${players.size} players to database"
+                ))
+
+                println("✅ Manually saved ${players.size} players to both collections")
+            } else {
+                call.respond(RconResponse(
+                    success = true,
+                    error = "No players online to save"
+                ))
+            }
+
+        } catch (e: Exception) {
+            println("RCON Save Error: ${e.message}")
+            e.printStackTrace()
+
+            call.respond(HttpStatusCode.InternalServerError, RconResponse(
+                success = false,
+                error = e.message,
+                error_type = e.javaClass.simpleName
+            ))
+        }
+    }
+
+    // Эндпоинт для получения полной информации о сервере И записи в БД
+    post("/rcon/server-info-and-save") {
+        val rconPassword = System.getenv("RCON_PASSWORD") ?: return@post call.respond(
+            HttpStatusCode.InternalServerError,
+            RconResponse(success = false, error = "No RCON_PASSWORD")
+        )
+
+        try {
+            val client = RconClient("203.16.163.232", 28836, rconPassword)
+            val rawResponse = client.connectAndFetchStatus()
+
+            val serverInfo = parseServerInfo(rawResponse)
+
+            if (serverInfo != null) {
+                // Сохраняем игроков в БД
                 if (serverInfo.playersList.isNotEmpty()) {
-                    // Сохраняем в обе коллекции
                     savePlayersToFirebase(serverInfo.playersList) // Старая коллекция
                     savePlayersDataToFirebase(serverInfo.playersList) // Новая детальная коллекция
                     println("✅ Saved ${serverInfo.playersList.size} players to both collections")
                 }
+
+                call.respond(serverInfo)
             } else {
                 call.respond(HttpStatusCode.InternalServerError, RconResponse(
                     success = false,
