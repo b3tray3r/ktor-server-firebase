@@ -1188,43 +1188,113 @@ fun Route.rconRoutes() {
             }
 
             val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-            val documents = json["documents"]?.jsonArray ?: return@get call.respond(emptyList<Map<String, Any>>())
+            val documents = json["documents"]?.jsonArray ?: return@get call.respond(emptyList<PlayerStatistics>())
 
-            val playersList = mutableListOf<Map<String, Any>>()
+            val playerStatsList = mutableListOf<PlayerStatistics>()
+
             for (doc in documents) {
                 val fields = doc.jsonObject["fields"]?.jsonObject ?: continue
-                val steamId = fields["steamId"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content
-                val lastUpdated = fields["lastUpdated"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content
 
-                if (steamId != null) {
-                    val lastUpdatedInDb = fields["lastUpdatedInDb"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content
+                try {
+                    val steamId = fields["steamId"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: continue
+                    val lastUpdate = fields["lastUpdate"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
+                    val joins = fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val leaves = fields["leaves"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
                     val kills = fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
                     val deaths = fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val suicides = fields["suicides"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val shots = fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val headshots = fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val experiments = fields["experiments"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val recoveries = fields["recoveries"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val voiceBytes = fields["voiceBytes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
+                    val woundedTimes = fields["woundedTimes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val craftedItems = fields["craftedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val repairedItems = fields["repairedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val liftUsages = fields["liftUsages"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val wheelSpins = fields["wheelSpins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val hammerHits = fields["hammerHits"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val explosivesThrown = fields["explosivesThrown"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val weaponReloads = fields["weaponReloads"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val rocketsLaunched = fields["rocketsLaunched"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    val secondsPlayed = fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
+                    val lastUpdatedInDb = fields["lastUpdatedInDb"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content ?: ""
+
                     val names = fields["names"]?.jsonObject?.get("arrayValue")?.jsonObject?.get("values")?.jsonArray?.mapNotNull {
                         it.jsonObject["stringValue"]?.jsonPrimitive?.content
                     } ?: emptyList()
 
-                    playersList.add(mapOf(
-                        "steamId" to steamId,
-                        "lastUpdatedInDb" to (lastUpdatedInDb ?: ""),
-                        "kills" to kills,
-                        "deaths" to deaths,
-                        "names" to names
-                    ))
+                    val ips = fields["ips"]?.jsonObject?.get("arrayValue")?.jsonObject?.get("values")?.jsonArray?.mapNotNull {
+                        it.jsonObject["stringValue"]?.jsonPrimitive?.content
+                    } ?: emptyList()
+
+                    val timeStamps = fields["timeStamps"]?.jsonObject?.get("arrayValue")?.jsonObject?.get("values")?.jsonArray?.mapNotNull {
+                        it.jsonObject["integerValue"]?.jsonPrimitive?.longOrNull
+                    } ?: emptyList()
+
+                    val gathered = fields["gathered"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
+                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+                    }?.toMap() ?: emptyMap()
+
+                    val collectiblePickups = fields["collectiblePickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
+                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+                    }?.toMap() ?: emptyMap()
+
+                    val plantPickups = fields["plantPickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
+                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+                    }?.toMap() ?: emptyMap()
+
+                    val playerStats = PlayerStatistics(
+                        steamId = steamId,
+                        lastUpdate = lastUpdate,
+                        joins = joins,
+                        leaves = leaves,
+                        kills = kills,
+                        deaths = deaths,
+                        suicides = suicides,
+                        shots = shots,
+                        headshots = headshots,
+                        experiments = experiments,
+                        recoveries = recoveries,
+                        voiceBytes = voiceBytes,
+                        woundedTimes = woundedTimes,
+                        craftedItems = craftedItems,
+                        repairedItems = repairedItems,
+                        liftUsages = liftUsages,
+                        wheelSpins = wheelSpins,
+                        hammerHits = hammerHits,
+                        explosivesThrown = explosivesThrown,
+                        weaponReloads = weaponReloads,
+                        rocketsLaunched = rocketsLaunched,
+                        secondsPlayed = secondsPlayed,
+                        names = names,
+                        ips = ips,
+                        timeStamps = timeStamps,
+                        gathered = gathered,
+                        collectiblePickups = collectiblePickups,
+                        plantPickups = plantPickups,
+                        lastUpdatedInDb = lastUpdatedInDb,
+                        rawResponse = null
+                    )
+
+                    playerStatsList.add(playerStats)
+
+                } catch (e: Exception) {
+                    println("❌ Error parsing player stats: ${e.message}")
+                    e.printStackTrace()
+                    continue
                 }
             }
 
-            call.respond(mapOf(
-                "totalPlayers" to playersList.size,
-                "players" to playersList
-            ))
+            call.respond(playerStatsList)
 
         } catch (e: Exception) {
-            println("❌ Error getting statistics players list: ${e.message}")
+            println("❌ Error in stats-players-list: ${e.message}")
             e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
         }
     }
+
 
     // Тестовый эндпоинт для проверки RCON команды statistics.output
     get("/rcon/test-statistics/{steamId}") {
