@@ -5,6 +5,7 @@ import org.java_websocket.handshake.ServerHandshake
 import java.net.URI
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.delay
 
 class RconClient(
     private val ip: String,
@@ -13,20 +14,29 @@ class RconClient(
 ) {
 
     suspend fun connectAndFetchStatus(): String {
+        return executeCommand("status")
+    }
+
+    suspend fun getPlayerStatistics(steamId: String): String {
+        return executeCommand("statistics.output $steamId")
+    }
+
+    private suspend fun executeCommand(command: String): String {
         return withTimeout(30000) { // 30 секунд таймаут
             val response = CompletableDeferred<String>()
             val uri = URI("ws://$ip:$port/$password")
 
             val client = object : WebSocketClient(uri) {
                 override fun onOpen(handshakedata: ServerHandshake?) {
-                    println("WebSocket connected, sending status command...")
-                    send("{\"Identifier\": -1, \"Message\": \"status\", \"Name\": \"WebRcon\"}")
+                    println("WebSocket connected, sending command: $command")
+                    send("{\"Identifier\": -1, \"Message\": \"$command\", \"Name\": \"WebRcon\"}")
                 }
 
                 override fun onMessage(message: String?) {
-                    println("Received message length: ${message?.length}")
-                    println("Received message: '$message'")
-                    println("Message bytes: ${message?.toByteArray()?.joinToString { it.toString() }}")
+                    println("Received message for command '$command', length: ${message?.length}")
+                    if (command.startsWith("statistics.output")) {
+                        println("Statistics response: $message")
+                    }
                     if (message != null && !response.isCompleted) {
                         response.complete(message)
                         close()
@@ -58,10 +68,16 @@ class RconClient(
 
                 val result = response.await()
                 client.close()
+
+                // Добавляем небольшую задержку между запросами
+                if (command.startsWith("statistics.output")) {
+                    delay(500) // 500ms задержка между статистическими запросами
+                }
+
                 result
 
             } catch (e: Exception) {
-                println("Error in connectAndFetchStatus: ${e.message}")
+                println("Error in executeCommand '$command': ${e.message}")
                 try {
                     client.close()
                 } catch (closeEx: Exception) {

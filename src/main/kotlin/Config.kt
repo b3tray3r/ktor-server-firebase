@@ -15,4 +15,5 @@ object Config {
 
     // Новая коллекция для детальных данных игроков
     val RUST_PLAYER_DATA_COLLECTION = "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents/rust_player_data"
+    val RUST_PLAYER_STATS_COLLECTION = "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents/rust_player_stats"
 }
