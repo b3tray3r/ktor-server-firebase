@@ -97,7 +97,21 @@ data class RconServerResponse(
     val Type: String,
     val Stacktrace: String
 )
+@Serializable
+data class LeaderboardEntry(
+    val steamId: String,
+    val name: String,
+    val value: Int,
+    val statType: String
+)
 
+@Serializable
+data class LeaderboardResponse(
+    val statType: String,
+    val limit: Int,
+    val totalPlayers: Int,
+    val leaderboard: List<LeaderboardEntry>
+)
 @Serializable
 data class ServerInfo(
     val hostname: String,
@@ -1000,6 +1014,185 @@ suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
 
 // RCON роуты
 fun Route.rconRoutes() {
+    get("/rcon/leaderboard/{statType}/{limit}") {
+        val statType = call.parameters["statType"] ?: return@get call.respond(
+            HttpStatusCode.BadRequest,
+            mapOf("error" to "Stat type is required (kills, deaths, shots, headshots, etc.)")
+        )
+
+        val limit = call.parameters["limit"]?.toIntOrNull() ?: return@get call.respond(
+            HttpStatusCode.BadRequest,
+            mapOf("error" to "Limit must be a valid number")
+        )
+
+        try {
+            val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
+            if (response.status != HttpStatusCode.OK) {
+                return@get call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to fetch statistics data"))
+            }
+
+            val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            val documents = json["documents"]?.jsonArray ?: return@get call.respond(
+                LeaderboardResponse(
+                    statType = statType,
+                    limit = limit,
+                    totalPlayers = 0,
+                    leaderboard = emptyList()
+                )
+            )
+
+            val leaderboard = mutableListOf<LeaderboardEntry>()
+
+            for (doc in documents) {
+                val fields = doc.jsonObject["fields"]?.jsonObject ?: continue
+                val steamId = fields["steamId"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: continue
+                val names = fields["names"]?.jsonObject?.get("arrayValue")?.jsonObject?.get("values")?.jsonArray?.mapNotNull {
+                    it.jsonObject["stringValue"]?.jsonPrimitive?.content
+                } ?: emptyList()
+
+                val currentName = names.lastOrNull() ?: "Unknown"
+
+                val statValue = when (statType.lowercase()) {
+                    "kills" -> fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "deaths" -> fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "shots" -> fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "headshots" -> fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "secondsplayed" -> fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "crafteditems" -> fields["craftedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "joins" -> fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "kdr" -> {
+                        val kills = fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        val deaths = fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        if (deaths > 0) (kills.toDouble() / deaths * 100).toInt() else kills * 100
+                    }
+                    "accuracy" -> {
+                        val shots = fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        val headshots = fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        if (shots > 0) (headshots.toDouble() / shots * 100).toInt() else 0
+                    }
+                    else -> {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Unknown stat type: $statType"))
+                        return@get
+                    }
+                }
+
+                leaderboard.add(
+                    LeaderboardEntry(
+                        steamId = steamId,
+                        name = currentName,
+                        value = statValue,
+                        statType = statType
+                    )
+                )
+            }
+
+            // Сортируем по убыванию и ограничиваем количество
+            val sortedLeaderboard = leaderboard.sortedByDescending { it.value }.take(limit)
+
+            val leaderboardResponse = LeaderboardResponse(
+                statType = statType,
+                limit = limit,
+                totalPlayers = leaderboard.size,
+                leaderboard = sortedLeaderboard
+            )
+
+            call.respond(leaderboardResponse)
+
+        } catch (e: Exception) {
+            println("❌ Error getting leaderboard: ${e.message}")
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
+        }
+    }
+
+    // Совместимость со старым endpoint (лимит в query parameter)
+    get("/rcon/leaderboard/{statType}") {
+        val statType = call.parameters["statType"] ?: return@get call.respond(
+            HttpStatusCode.BadRequest,
+            mapOf("error" to "Stat type is required (kills, deaths, shots, headshots, etc.)")
+        )
+
+        val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 10
+
+        try {
+            val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
+            if (response.status != HttpStatusCode.OK) {
+                return@get call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to fetch statistics data"))
+            }
+
+            val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            val documents = json["documents"]?.jsonArray ?: return@get call.respond(
+                LeaderboardResponse(
+                    statType = statType,
+                    limit = limit,
+                    totalPlayers = 0,
+                    leaderboard = emptyList()
+                )
+            )
+
+            val leaderboard = mutableListOf<LeaderboardEntry>()
+
+            for (doc in documents) {
+                val fields = doc.jsonObject["fields"]?.jsonObject ?: continue
+                val steamId = fields["steamId"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: continue
+                val names = fields["names"]?.jsonObject?.get("arrayValue")?.jsonObject?.get("values")?.jsonArray?.mapNotNull {
+                    it.jsonObject["stringValue"]?.jsonPrimitive?.content
+                } ?: emptyList()
+
+                val currentName = names.lastOrNull() ?: "Unknown"
+
+                val statValue = when (statType.lowercase()) {
+                    "kills" -> fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "deaths" -> fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "shots" -> fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "headshots" -> fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "secondsplayed" -> fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "crafteditems" -> fields["craftedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "joins" -> fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                    "kdr" -> {
+                        val kills = fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        val deaths = fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        if (deaths > 0) (kills.toDouble() / deaths * 100).toInt() else kills * 100
+                    }
+                    "accuracy" -> {
+                        val shots = fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        val headshots = fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+                        if (shots > 0) (headshots.toDouble() / shots * 100).toInt() else 0
+                    }
+                    else -> {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Unknown stat type: $statType"))
+                        return@get
+                    }
+                }
+
+                leaderboard.add(
+                    LeaderboardEntry(
+                        steamId = steamId,
+                        name = currentName,
+                        value = statValue,
+                        statType = statType
+                    )
+                )
+            }
+
+            // Сортируем по убыванию и ограничиваем количество
+            val sortedLeaderboard = leaderboard.sortedByDescending { it.value }.take(limit)
+
+            val leaderboardResponse = LeaderboardResponse(
+                statType = statType,
+                limit = limit,
+                totalPlayers = leaderboard.size,
+                leaderboard = sortedLeaderboard
+            )
+
+            call.respond(leaderboardResponse)
+
+        } catch (e: Exception) {
+            println("❌ Error getting leaderboard: ${e.message}")
+            e.printStackTrace()
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
+        }
+    }
     // Только получение данных игроков (без записи в БД)
     get("/rcon/player-stats/{steamId}") {
         val steamId = call.parameters["steamId"] ?: return@get call.respond(
@@ -1330,85 +1523,7 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Получение топ игроков по различным статистикам
-    get("/rcon/leaderboard/{statType}") {
-        val statType = call.parameters["statType"] ?: return@get call.respond(
-            HttpStatusCode.BadRequest,
-            mapOf("error" to "Stat type is required (kills, deaths, shots, headshots, etc.)")
-        )
 
-        val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 10
-
-        try {
-            val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
-            if (response.status != HttpStatusCode.OK) {
-                return@get call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to fetch statistics data"))
-            }
-
-            val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-            val documents = json["documents"]?.jsonArray ?: return@get call.respond(emptyList<Map<String, Any>>())
-
-            val leaderboard = mutableListOf<Map<String, Any>>()
-
-            for (doc in documents) {
-                val fields = doc.jsonObject["fields"]?.jsonObject ?: continue
-                val steamId = fields["steamId"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: continue
-                val names = fields["names"]?.jsonObject?.get("arrayValue")?.jsonObject?.get("values")?.jsonArray?.mapNotNull {
-                    it.jsonObject["stringValue"]?.jsonPrimitive?.content
-                } ?: emptyList()
-
-                val currentName = names.lastOrNull() ?: "Unknown"
-
-                val statValue = when (statType.lowercase()) {
-                    "kills" -> fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    "deaths" -> fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    "shots" -> fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    "headshots" -> fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    "secondsplayed" -> fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    "crafteditems" -> fields["craftedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    "joins" -> fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    "kdr" -> {
-                        val kills = fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                        val deaths = fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                        if (deaths > 0) (kills.toDouble() / deaths * 100).toInt() else kills * 100
-                    }
-                    "accuracy" -> {
-                        val shots = fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                        val headshots = fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                        if (shots > 0) (headshots.toDouble() / shots * 100).toInt() else 0
-                    }
-                    else -> {
-                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Unknown stat type: $statType"))
-                        return@get
-                    }
-                }
-
-                leaderboard.add(mapOf(
-                    "steamId" to steamId,
-                    "name" to currentName,
-                    "value" to statValue,
-                    "statType" to statType
-                ))
-            }
-
-            // Сортируем по убыванию и ограничиваем количество
-            val sortedLeaderboard = leaderboard.sortedByDescending {
-                it["value"] as Int
-            }.take(limit)
-
-            call.respond(mapOf(
-                "statType" to statType,
-                "limit" to limit,
-                "totalPlayers" to leaderboard.size,
-                "leaderboard" to sortedLeaderboard
-            ))
-
-        } catch (e: Exception) {
-            println("❌ Error getting leaderboard: ${e.message}")
-            e.printStackTrace()
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
-        }
-    }
     get("/rcon/fetch") {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
 
