@@ -489,7 +489,7 @@ suspend fun collectAllPlayersStatistics(): StatisticsCollectionResult {
         }
 
         println("🔄 Processing ${steamIds.size} players...")
-        val rconClient = RconClient("80.242.59.103", 35016, rconPassword)
+        val rconClient = RconClient("80.242.59.103", 36016, rconPassword)
 
         // Обрабатываем каждого игрока
         for ((index, steamId) in steamIds.withIndex()) {
@@ -1207,7 +1207,7 @@ fun Route.rconRoutes() {
 
         try {
             println("🔄 Getting statistics for Steam ID: $steamId")
-            val rconClient = RconClient("80.242.59.103", 35016, rconPassword)
+            val rconClient = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = rconClient.getPlayerStatistics(steamId)
 
             val playerStats = parsePlayerStatistics(steamId, rawResponse)
@@ -1502,7 +1502,7 @@ fun Route.rconRoutes() {
         )
 
         try {
-            val rconClient = RconClient("80.242.59.103", 35016, rconPassword)
+            val rconClient = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = rconClient.getPlayerStatistics(steamId)
 
             call.respond(RconResponse(
@@ -1528,7 +1528,7 @@ fun Route.rconRoutes() {
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(HttpStatusCode.InternalServerError, "No RCON_PASSWORD")
 
         try {
-            val client = RconClient("80.242.59.103", 35016, rconPassword)
+            val client = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = client.connectAndFetchStatus()
 
             val playersBlock = extractPlayersBlock(rawResponse)
@@ -1551,7 +1551,7 @@ fun Route.rconRoutes() {
         )
 
         try {
-            val client = RconClient("80.242.59.103", 35016, rconPassword)
+            val client = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = client.connectAndFetchStatus()
 
             call.respond(RconResponse(
@@ -1581,7 +1581,7 @@ fun Route.rconRoutes() {
         )
 
         try {
-            val client = RconClient("80.242.59.103", 35016, rconPassword)
+            val client = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = client.connectAndFetchStatus()
 
             val serverInfo = parseServerInfo(rawResponse)
@@ -1615,7 +1615,7 @@ fun Route.rconRoutes() {
         )
 
         try {
-            val client = RconClient("80.242.59.103", 35016, rconPassword)
+            val client = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = client.connectAndFetchStatus()
 
             val playersBlock = extractPlayersBlock(rawResponse)
@@ -1659,7 +1659,7 @@ fun Route.rconRoutes() {
         )
 
         try {
-            val client = RconClient("80.242.59.103", 35016, rconPassword)
+            val client = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = client.connectAndFetchStatus()
 
             val serverInfo = parseServerInfo(rawResponse)
@@ -1699,7 +1699,7 @@ fun Application.scheduleRconTask() {
         while (true) {
             delay(60 * 60 * 1000) // Каждый час
             try {
-                val client = RconClient("80.242.59.1032", 35016, rconPassword)
+                val client = RconClient("80.242.59.103", 36016, rconPassword)
                 val rawResponse = client.connectAndFetchStatus()
                 val block = extractPlayersBlock(rawResponse)
                 val players = parsePlayers(block)
