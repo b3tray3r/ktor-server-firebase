@@ -21,7 +21,7 @@ class RconClient(
         return executeCommand("statistics.output $steamId")
     }
 
-    private suspend fun executeCommand(command: String): String {
+    suspend fun executeCommand(command: String): String {
         return withTimeout(30000) { // 30 секунд таймаут
             val response = CompletableDeferred<String>()
             val uri = URI("ws://$ip:$port/$password")
@@ -36,6 +36,9 @@ class RconClient(
                     println("Received message for command '$command', length: ${message?.length}")
                     if (command.startsWith("statistics.output")) {
                         println("Statistics response: $message")
+                    }
+                    if (command.startsWith("konurashop.addbalance")) {
+                        println("Balance update response: $message")
                     }
                     if (message != null && !response.isCompleted) {
                         response.complete(message)
@@ -70,8 +73,8 @@ class RconClient(
                 client.close()
 
                 // Добавляем небольшую задержку между запросами
-                if (command.startsWith("statistics.output")) {
-                    delay(500) // 500ms задержка между статистическими запросами
+                if (command.startsWith("statistics.output") || command.startsWith("konurashop.addbalance")) {
+                    delay(500) // 500ms задержка между запросами
                 }
 
                 result
