@@ -328,15 +328,17 @@ fun parsePlayerStatistics(steamId: String, rawResponse: String): PlayerStatistic
         // Извлекаем объекты с ресурсами и конвертируем в обычные Map
         val gathered = statisticsJson["Gathered"]?.jsonObject?.mapNotNull { (key, value) ->
             value.jsonPrimitive?.intOrNull?.let { key to it }
-        }?.toMap() ?: emptyMap()
+        }?.toMap()
+            ?.let { HashMap<String, Int>(it) }
+            ?: hashMapOf<String, Int>()
 
         val collectiblePickups = statisticsJson["CollectiblePickups"]?.jsonObject?.mapNotNull { (key, value) ->
             value.jsonPrimitive?.intOrNull?.let { key to it }
-        }?.toMap() ?: emptyMap()
+        }?.toMap() ?.let { HashMap<String, Int>(it) } ?: hashMapOf<String, Int>()
 
         val plantPickups = statisticsJson["PlantPickups"]?.jsonObject?.mapNotNull { (key, value) ->
             value.jsonPrimitive?.intOrNull?.let { key to it }
-        }?.toMap() ?: emptyMap()
+        }?.toMap() ?.let { HashMap<String, Int>(it) } ?: hashMapOf<String, Int>()
 
         PlayerStatistics(
             steamId = steamId,
