@@ -1227,18 +1227,33 @@ suspend fun parsePlayerStatisticsFromFirestore(steamId: String, fields: JsonObje
     val secondsPlayed = fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
     val lastUpdatedInDb = fields["lastUpdatedInDb"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content ?: ""
 
-    // Парсим Map-объекты безопасно
-    val gathered = fields["gathered"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-    }?.toMap() ?: emptyMap()
+    // Приводим к обычным HashMap<String, Int> (чтобы избежать LinkedHashMap при сериализации)
+    val gathered = fields["gathered"]?.jsonObject
+        ?.get("mapValue")?.jsonObject
+        ?.get("fields")?.jsonObject
+        ?.mapNotNull { (key, value) ->
+            value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+        }
+        ?.toMap()
+        ?.let { HashMap<String, Int>(it) } ?: hashMapOf<String, Int>()
 
-    val collectiblePickups = fields["collectiblePickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-    }?.toMap() ?: emptyMap()
+    val collectiblePickups = fields["collectiblePickups"]?.jsonObject
+        ?.get("mapValue")?.jsonObject
+        ?.get("fields")?.jsonObject
+        ?.mapNotNull { (key, value) ->
+            value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+        }
+        ?.toMap()
+        ?.let { HashMap<String, Int>(it) } ?: hashMapOf<String, Int>()
 
-    val plantPickups = fields["plantPickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-    }?.toMap() ?: emptyMap()
+    val plantPickups = fields["plantPickups"]?.jsonObject
+        ?.get("mapValue")?.jsonObject
+        ?.get("fields")?.jsonObject
+        ?.mapNotNull { (key, value) ->
+            value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+        }
+        ?.toMap()
+        ?.let { HashMap<String, Int>(it) } ?: hashMapOf<String, Int>()
 
     return PlayerStatistics(
         steamId = steamId,
@@ -1270,6 +1285,8 @@ suspend fun parsePlayerStatisticsFromFirestore(steamId: String, fields: JsonObje
         lastUpdatedInDb = lastUpdatedInDb
     )
 }
+
+
 
 fun isAdmin(steamId: String): Boolean {
     val adminSteamIds = System.getenv("ADMIN_STEAM_IDS")?.split(",") ?: emptyList()
