@@ -903,9 +903,21 @@ fun Route.rconRoutes() {
     // Получение списка всех игроков со статистикой
     get("/rcon/stats-players-list") {
         try {
+            println("🔄 Fetching from URL: ${Config.RUST_PLAYER_STATS_COLLECTION}")
+
             val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
+
+            println("📊 Response status: ${response.status}")
+            println("📊 Response headers: ${response.headers}")
+
             if (response.status != HttpStatusCode.OK) {
-                return@get call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Failed to fetch statistics data"))
+                val errorBody = response.bodyAsText()
+                println("❌ Error response body: $errorBody")
+                return@get call.respond(HttpStatusCode.InternalServerError, mapOf(
+                    "error" to "Failed to fetch statistics data",
+                    "status" to response.status.value,
+                    "details" to errorBody
+                ))
             }
 
             val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
@@ -991,7 +1003,8 @@ fun Route.rconRoutes() {
             call.respond(playerStatsList)
 
         } catch (e: Exception) {
-            println("❌ Error in stats-players-list: ${e.message}")
+            println("❌ Exception in stats-players-list: ${e.message}")
+            e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
         }
     }
