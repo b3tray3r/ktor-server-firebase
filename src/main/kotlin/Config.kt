@@ -15,8 +15,4 @@ object Config {
     val RUST_PLAYER_DATA_COLLECTION = "$BASE_URL/rust_player_data"
     val RUST_PLAYER_STATS_COLLECTION = "$BASE_URL/rust_player_stats"
     val RUST_PLAYER_BALANCE_COLLECTION = "$BASE_URL/rust_player_balance"
-
-    // RCON настройки
-    const val RCON_HOST = "80.242.59.103"
-    const val RCON_PORT = 36016
 }

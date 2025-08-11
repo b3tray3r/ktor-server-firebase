@@ -17,11 +17,33 @@ import io.ktor.client.statement.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.datetime.Clock
+import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 
 private val client = HttpClient(CIO) {
     install(ContentNegotiation) {
         json()
     }
+}
+
+// Сессия для безопасной аутентификации
+@Serializable
+data class UserSession(
+    val steamId: String,
+    val sessionToken: String,
+    val createdAt: Long
+)
+
+// Хранилище активных сессий (в продакшене лучше использовать Redis)
+private val activeSessions = ConcurrentHashMap<String, UserSession>()
+
+// Генератор безопасных токенов
+private val secureRandom = SecureRandom()
+
+fun generateSessionToken(): String {
+    val bytes = ByteArray(32)
+    secureRandom.nextBytes(bytes)
+    return bytes.joinToString("") { "%02x".format(it) }
 }
 
 // Основные модели данных
@@ -144,6 +166,45 @@ data class RconServerResponse(
     val Stacktrace: String
 )
 
+@Serializable
+data class AuthResponse(
+    val success: Boolean,
+    val sessionToken: String? = null,
+    val steamId: String? = null,
+    val error: String? = null
+)
+
+// Middleware для проверки сессии
+suspend fun ApplicationCall.requireAuth(): UserSession? {
+    val authHeader = request.headers["Authorization"]
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        return null
+    }
+
+    val token = authHeader.removePrefix("Bearer ")
+    val session = activeSessions[token]
+
+    // Проверяем, не истекла ли сессия (24 часа)
+    if (session != null && System.currentTimeMillis() - session.createdAt > 24 * 60 * 60 * 1000) {
+        activeSessions.remove(token)
+        return null
+    }
+
+    return session
+}
+
+// Очистка истекших сессий
+fun cleanupExpiredSessions() {
+    val now = System.currentTimeMillis()
+    val expiredTokens = activeSessions.entries
+        .filter { (_, session) -> now - session.createdAt > 24 * 60 * 60 * 1000 }
+        .map { it.key }
+
+    expiredTokens.forEach { token ->
+        activeSessions.remove(token)
+    }
+}
+
 // Функции для работы с балансом игроков
 suspend fun getPlayerBalance(steamId: String): PlayerBalance? {
     return try {
@@ -264,7 +325,7 @@ fun parsePlayerStatistics(steamId: String, rawResponse: String): PlayerStatistic
         } ?: emptyList()
         val currentName = names.lastOrNull() ?: "Unknown"
 
-        // Извлекаем объекты с ресурсами
+        // Извлекаем объекты с ресурсами и конвертируем в обычные Map
         val gathered = statisticsJson["Gathered"]?.jsonObject?.mapNotNull { (key, value) ->
             value.jsonPrimitive?.intOrNull?.let { key to it }
         }?.toMap() ?: emptyMap()
@@ -758,21 +819,82 @@ fun Route.steamAuthRoutes() {
                 saveSteamUser(steamId)
             }
 
-            call.respondRedirect("https://konurarust.com/?steamId=$steamId")
+            // Создаем безопасную сессию
+            val sessionToken = generateSessionToken()
+            val session = UserSession(
+                steamId = steamId,
+                sessionToken = sessionToken,
+                createdAt = System.currentTimeMillis()
+            )
+            activeSessions[sessionToken] = session
+
+            // Перенаправляем на фронтенд с токеном вместо Steam ID
+            call.respondRedirect("https://konurarust.com/?token=$sessionToken")
         } else {
             println("Steam verification failed: $body")
             call.respondText("Ошибка авторизации через Steam")
         }
     }
+
+    // Новый эндпоинт для получения информации о пользователе по токену
+    get("/auth/me") {
+        val session = call.requireAuth()
+        if (session == null) {
+            call.respond(HttpStatusCode.Unauthorized, AuthResponse(
+                success = false,
+                error = "Invalid or expired session"
+            ))
+            return@get
+        }
+
+        val userProfile = getSteamUserFromFirebase(session.steamId)
+        if (userProfile != null) {
+            call.respond(mapOf(
+                "success" to true,
+                "steamId" to session.steamId,
+                "user" to userProfile
+            ))
+        } else {
+            call.respond(HttpStatusCode.NotFound, AuthResponse(
+                success = false,
+                error = "User profile not found"
+            ))
+        }
+    }
+
+    // Эндпоинт для выхода
+    post("/auth/logout") {
+        val session = call.requireAuth()
+        if (session != null) {
+            activeSessions.remove(session.sessionToken)
+        }
+        call.respond(AuthResponse(success = true))
+    }
 }
 
 fun Route.rconRoutes() {
-    // Получение статистики игрока напрямую с сервера
+    // Получение статистики игрока напрямую с сервера (требует авторизацию)
     get("/rcon/player-stats/{steamId}") {
+        val session = call.requireAuth()
+        if (session == null) {
+            return@get call.respond(HttpStatusCode.Unauthorized, RconResponse(
+                success = false,
+                error = "Authentication required"
+            ))
+        }
+
         val steamId = call.parameters["steamId"] ?: return@get call.respond(
             HttpStatusCode.BadRequest,
             RconResponse(success = false, error = "Steam ID is required")
         )
+
+        // Пользователь может получать только свои данные или если это админ
+        if (session.steamId != steamId && !isAdmin(session.steamId)) {
+            return@get call.respond(HttpStatusCode.Forbidden, RconResponse(
+                success = false,
+                error = "Access denied"
+            ))
+        }
 
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
             HttpStatusCode.InternalServerError,
@@ -803,12 +925,22 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Получение сохраненной статистики из БД
+    // Получение сохраненной статистики из БД (требует авторизацию)
     get("/rcon/saved-stats/{steamId}") {
+        val session = call.requireAuth()
+        if (session == null) {
+            return@get call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Authentication required"))
+        }
+
         val steamId = call.parameters["steamId"] ?: return@get call.respond(
             HttpStatusCode.BadRequest,
             mapOf("error" to "Steam ID is required")
         )
+
+        // Пользователь может получать только свои данные или если это админ
+        if (session.steamId != steamId && !isAdmin(session.steamId)) {
+            return@get call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Access denied"))
+        }
 
         try {
             val docUrl = "${Config.RUST_PLAYER_STATS_COLLECTION}/$steamId"
@@ -819,73 +951,7 @@ fun Route.rconRoutes() {
                 val fields = json["fields"]?.jsonObject
 
                 if (fields != null) {
-                    val steamIdField = fields["steamId"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: steamId
-                    val currentName = fields["currentName"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: "Unknown"
-                    val lastUpdate = fields["lastUpdate"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
-                    val joins = fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val leaves = fields["leaves"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val kills = fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val deaths = fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val suicides = fields["suicides"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val shots = fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val headshots = fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val experiments = fields["experiments"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val recoveries = fields["recoveries"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val voiceBytes = fields["voiceBytes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
-                    val woundedTimes = fields["woundedTimes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val craftedItems = fields["craftedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val repairedItems = fields["repairedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val liftUsages = fields["liftUsages"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val wheelSpins = fields["wheelSpins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val hammerHits = fields["hammerHits"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val explosivesThrown = fields["explosivesThrown"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val weaponReloads = fields["weaponReloads"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val rocketsLaunched = fields["rocketsLaunched"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val secondsPlayed = fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
-                    val lastUpdatedInDb = fields["lastUpdatedInDb"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content ?: ""
-
-                    val gathered = fields["gathered"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-                    }?.toMap() ?: emptyMap()
-
-                    val collectiblePickups = fields["collectiblePickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-                    }?.toMap() ?: emptyMap()
-
-                    val plantPickups = fields["plantPickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-                    }?.toMap() ?: emptyMap()
-
-                    val playerStats = PlayerStatistics(
-                        steamId = steamIdField,
-                        lastUpdate = lastUpdate,
-                        joins = joins,
-                        leaves = leaves,
-                        kills = kills,
-                        deaths = deaths,
-                        suicides = suicides,
-                        shots = shots,
-                        headshots = headshots,
-                        experiments = experiments,
-                        recoveries = recoveries,
-                        voiceBytes = voiceBytes,
-                        woundedTimes = woundedTimes,
-                        craftedItems = craftedItems,
-                        repairedItems = repairedItems,
-                        liftUsages = liftUsages,
-                        wheelSpins = wheelSpins,
-                        hammerHits = hammerHits,
-                        explosivesThrown = explosivesThrown,
-                        weaponReloads = weaponReloads,
-                        rocketsLaunched = rocketsLaunched,
-                        secondsPlayed = secondsPlayed,
-                        currentName = currentName,
-                        gathered = gathered,
-                        collectiblePickups = collectiblePickups,
-                        plantPickups = plantPickups,
-                        lastUpdatedInDb = lastUpdatedInDb
-                    )
-
+                    val playerStats = parsePlayerStatisticsFromFirestore(steamId, fields)
                     call.respond(playerStats)
                 } else {
                     call.respond(HttpStatusCode.NotFound, mapOf("error" to "Statistics not found for Steam ID: $steamId"))
@@ -900,7 +966,7 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Получение списка всех игроков со статистикой
+    // Получение списка всех игроков со статистикой (публичный доступ)
     get("/rcon/stats-players-list") {
         try {
             println("🔄 Fetching from URL: ${Config.RUST_PLAYER_STATS_COLLECTION}")
@@ -908,8 +974,6 @@ fun Route.rconRoutes() {
             val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
 
             println("📊 Response status: ${response.status}")
-            println("📊 Response headers: ${response.headers}")
-
             if (response.status != HttpStatusCode.OK) {
                 val errorBody = response.bodyAsText()
                 println("❌ Error response body: $errorBody")
@@ -926,74 +990,8 @@ fun Route.rconRoutes() {
             val playerStatsList = documents.mapNotNull { doc ->
                 try {
                     val fields = doc.jsonObject["fields"]?.jsonObject ?: return@mapNotNull null
-
                     val steamId = fields["steamId"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: return@mapNotNull null
-                    val currentName = fields["currentName"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: "Unknown"
-                    val lastUpdate = fields["lastUpdate"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
-                    val joins = fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val leaves = fields["leaves"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val kills = fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val deaths = fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val suicides = fields["suicides"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val shots = fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val headshots = fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val experiments = fields["experiments"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val recoveries = fields["recoveries"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val voiceBytes = fields["voiceBytes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
-                    val woundedTimes = fields["woundedTimes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val craftedItems = fields["craftedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val repairedItems = fields["repairedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val liftUsages = fields["liftUsages"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val wheelSpins = fields["wheelSpins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val hammerHits = fields["hammerHits"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val explosivesThrown = fields["explosivesThrown"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val weaponReloads = fields["weaponReloads"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val rocketsLaunched = fields["rocketsLaunched"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
-                    val secondsPlayed = fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
-                    val lastUpdatedInDb = fields["lastUpdatedInDb"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content ?: ""
-
-                    val gathered = fields["gathered"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-                    }?.toMap() ?: emptyMap()
-
-                    val collectiblePickups = fields["collectiblePickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-                    }?.toMap() ?: emptyMap()
-
-                    val plantPickups = fields["plantPickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
-                        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
-                    }?.toMap() ?: emptyMap()
-
-                    PlayerStatistics(
-                        steamId = steamId,
-                        lastUpdate = lastUpdate,
-                        joins = joins,
-                        leaves = leaves,
-                        kills = kills,
-                        deaths = deaths,
-                        suicides = suicides,
-                        shots = shots,
-                        headshots = headshots,
-                        experiments = experiments,
-                        recoveries = recoveries,
-                        voiceBytes = voiceBytes,
-                        woundedTimes = woundedTimes,
-                        craftedItems = craftedItems,
-                        repairedItems = repairedItems,
-                        liftUsages = liftUsages,
-                        wheelSpins = wheelSpins,
-                        hammerHits = hammerHits,
-                        explosivesThrown = explosivesThrown,
-                        weaponReloads = weaponReloads,
-                        rocketsLaunched = rocketsLaunched,
-                        secondsPlayed = secondsPlayed,
-                        currentName = currentName,
-                        gathered = gathered,
-                        collectiblePickups = collectiblePickups,
-                        plantPickups = plantPickups,
-                        lastUpdatedInDb = lastUpdatedInDb
-                    )
-
+                    parsePlayerStatisticsFromFirestore(steamId, fields)
                 } catch (e: Exception) {
                     println("❌ Error parsing player stats: ${e.message}")
                     null
@@ -1009,8 +1007,16 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Сбор статистики всех игроков
+    // Сбор статистики всех игроков (только для админов)
     post("/rcon/collect-all-statistics") {
+        val session = call.requireAuth()
+        if (session == null || !isAdmin(session.steamId)) {
+            return@post call.respond(HttpStatusCode.Forbidden, RconResponse(
+                success = false,
+                error = "Admin access required"
+            ))
+        }
+
         try {
             val result = collectAllPlayersStatistics()
             call.respond(result)
@@ -1023,7 +1029,7 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Лидерборд с лимитом в пути
+    // Лидерборд с лимитом в пути (публичный доступ)
     get("/rcon/leaderboard/{statType}/{limit}") {
         val statType = call.parameters["statType"] ?: return@get call.respond(
             HttpStatusCode.BadRequest,
@@ -1044,7 +1050,7 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Лидерборд с лимитом по умолчанию
+    // Лидерборд с лимитом по умолчанию (публичный доступ)
     get("/rcon/leaderboard/{statType}") {
         val statType = call.parameters["statType"] ?: return@get call.respond(
             HttpStatusCode.BadRequest,
@@ -1062,8 +1068,16 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Получение информации о сервере и сохранение в БД
+    // Получение информации о сервере и сохранение в БД (только для админов)
     post("/rcon/server-info-and-save") {
+        val session = call.requireAuth()
+        if (session == null || !isAdmin(session.steamId)) {
+            return@post call.respond(HttpStatusCode.Forbidden, RconResponse(
+                success = false,
+                error = "Admin access required"
+            ))
+        }
+
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@post call.respond(
             HttpStatusCode.InternalServerError,
             RconResponse(success = false, error = "No RCON_PASSWORD")
@@ -1096,8 +1110,16 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Добавление баланса игроку
+    // Добавление баланса игроку (только для админов)
     post("/rcon/add-balance/{steamId}") {
+        val session = call.requireAuth()
+        if (session == null || !isAdmin(session.steamId)) {
+            return@post call.respond(HttpStatusCode.Forbidden, RconResponse(
+                success = false,
+                error = "Admin access required"
+            ))
+        }
+
         val steamId = call.parameters["steamId"] ?: return@post call.respond(
             HttpStatusCode.BadRequest,
             RconResponse(success = false, error = "Steam ID is required")
@@ -1142,12 +1164,22 @@ fun Route.rconRoutes() {
         }
     }
 
-    // Получение баланса игрока
+    // Получение баланса игрока (пользователь может получить только свой баланс)
     get("/rcon/balance/{steamId}") {
+        val session = call.requireAuth()
+        if (session == null) {
+            return@get call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Authentication required"))
+        }
+
         val steamId = call.parameters["steamId"] ?: return@get call.respond(
             HttpStatusCode.BadRequest,
             mapOf("error" to "Steam ID is required")
         )
+
+        // Пользователь может получать только свой баланс или если это админ
+        if (session.steamId != steamId && !isAdmin(session.steamId)) {
+            return@get call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Access denied"))
+        }
 
         try {
             val balance = getPlayerBalance(steamId)
@@ -1167,6 +1199,81 @@ fun Route.rconRoutes() {
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
         }
     }
+}
+
+// Вспомогательные функции
+suspend fun parsePlayerStatisticsFromFirestore(steamId: String, fields: JsonObject): PlayerStatistics {
+    val currentName = fields["currentName"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: "Unknown"
+    val lastUpdate = fields["lastUpdate"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
+    val joins = fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val leaves = fields["leaves"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val kills = fields["kills"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val deaths = fields["deaths"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val suicides = fields["suicides"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val shots = fields["shots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val headshots = fields["headshots"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val experiments = fields["experiments"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val recoveries = fields["recoveries"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val voiceBytes = fields["voiceBytes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
+    val woundedTimes = fields["woundedTimes"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val craftedItems = fields["craftedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val repairedItems = fields["repairedItems"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val liftUsages = fields["liftUsages"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val wheelSpins = fields["wheelSpins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val hammerHits = fields["hammerHits"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val explosivesThrown = fields["explosivesThrown"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val weaponReloads = fields["weaponReloads"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val rocketsLaunched = fields["rocketsLaunched"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
+    val secondsPlayed = fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
+    val lastUpdatedInDb = fields["lastUpdatedInDb"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content ?: ""
+
+    // Парсим Map-объекты безопасно
+    val gathered = fields["gathered"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
+        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+    }?.toMap() ?: emptyMap()
+
+    val collectiblePickups = fields["collectiblePickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
+        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+    }?.toMap() ?: emptyMap()
+
+    val plantPickups = fields["plantPickups"]?.jsonObject?.get("mapValue")?.jsonObject?.get("fields")?.jsonObject?.mapNotNull { (key, value) ->
+        value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+    }?.toMap() ?: emptyMap()
+
+    return PlayerStatistics(
+        steamId = steamId,
+        lastUpdate = lastUpdate,
+        joins = joins,
+        leaves = leaves,
+        kills = kills,
+        deaths = deaths,
+        suicides = suicides,
+        shots = shots,
+        headshots = headshots,
+        experiments = experiments,
+        recoveries = recoveries,
+        voiceBytes = voiceBytes,
+        woundedTimes = woundedTimes,
+        craftedItems = craftedItems,
+        repairedItems = repairedItems,
+        liftUsages = liftUsages,
+        wheelSpins = wheelSpins,
+        hammerHits = hammerHits,
+        explosivesThrown = explosivesThrown,
+        weaponReloads = weaponReloads,
+        rocketsLaunched = rocketsLaunched,
+        secondsPlayed = secondsPlayed,
+        currentName = currentName,
+        gathered = gathered,
+        collectiblePickups = collectiblePickups,
+        plantPickups = plantPickups,
+        lastUpdatedInDb = lastUpdatedInDb
+    )
+}
+
+fun isAdmin(steamId: String): Boolean {
+    val adminSteamIds = System.getenv("ADMIN_STEAM_IDS")?.split(",") ?: emptyList()
+    return adminSteamIds.contains(steamId)
 }
 
 // Вспомогательная функция для получения лидерборда
@@ -1258,10 +1365,22 @@ fun Route.userRoutes() {
     }
 
     steamAuthRoutes()
+    rconRoutes()
 }
 
 fun Application.scheduleRconTask() {
     val rconPassword = System.getenv("RCON_PASSWORD") ?: return
+
+    // Периодическая очистка истекших сессий
+    launch {
+        while (true) {
+            delay(60 * 60 * 1000) // Каждый час
+            cleanupExpiredSessions()
+            println("✅ [SESSION CLEANUP] Cleaned expired sessions")
+        }
+    }
+
+    // Основная задача RCON
     launch {
         while (true) {
             delay(60 * 60 * 1000) // Каждый час
