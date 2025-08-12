@@ -100,6 +100,9 @@ data class PlayerStatistics(
     val rocketsLaunched: Int,
     val secondsPlayed: Long,
     val currentName: String,
+    val gathered: Map<String, Int> = emptyMap(),
+    val collectiblePickups: Map<String, Int> = emptyMap(),
+    val plantPickups: Map<String, Int> = emptyMap(),
     val lastUpdatedInDb: String
 )
 
@@ -326,6 +329,22 @@ fun parsePlayerStatistics(steamId: String, rawResponse: String): PlayerStatistic
         } ?: emptyList()
         val currentName = names.lastOrNull() ?: "Unknown"
 
+        // Извлекаем объекты с ресурсами и конвертируем в обычные Map
+        val gathered = statisticsJson["Gathered"]?.jsonObject?.mapNotNull { (key, value) ->
+            value.jsonPrimitive?.intOrNull?.let { key to it }
+        } ?.associate { it.first to it.second }
+            ?: emptyMap()
+
+        val collectiblePickups = statisticsJson["CollectiblePickups"]?.jsonObject?.mapNotNull { (key, value) ->
+            value.jsonPrimitive?.intOrNull?.let { key to it }
+        } ?.associate { it.first to it.second }
+            ?: emptyMap()
+
+        val plantPickups = statisticsJson["PlantPickups"]?.jsonObject?.mapNotNull { (key, value) ->
+            value.jsonPrimitive?.intOrNull?.let { key to it }
+        } ?.associate { it.first to it.second }
+            ?: emptyMap()
+
         PlayerStatistics(
             steamId = steamId,
             lastUpdate = statisticsJson["LastUpdate"]?.jsonPrimitive?.longOrNull ?: 0L,
@@ -350,6 +369,9 @@ fun parsePlayerStatistics(steamId: String, rawResponse: String): PlayerStatistic
             rocketsLaunched = statisticsJson["RocketsLaunched"]?.jsonPrimitive?.intOrNull ?: 0,
             secondsPlayed = statisticsJson["SecondsPlayed"]?.jsonPrimitive?.longOrNull ?: 0L,
             currentName = currentName,
+            gathered = gathered,
+            collectiblePickups = collectiblePickups,
+            plantPickups = plantPickups,
             lastUpdatedInDb = Clock.System.now().toString()
         )
 
@@ -363,6 +385,31 @@ suspend fun savePlayerStatistics(playerStats: PlayerStatistics): Boolean {
     return try {
         val docUrl = "${Config.RUST_PLAYER_STATS_COLLECTION}/${playerStats.steamId}"
         val now = Clock.System.now().toString()
+
+        // Подготавливаем данные для Firestore
+        val gatheredObject = buildJsonObject {
+            playerStats.gathered.forEach { (key, value) ->
+                put(key.replace(".", "_"), buildJsonObject {
+                    put("integerValue", value)
+                })
+            }
+        }
+
+        val collectiblePickupsObject = buildJsonObject {
+            playerStats.collectiblePickups.forEach { (key, value) ->
+                put(key.replace(".", "_"), buildJsonObject {
+                    put("integerValue", value)
+                })
+            }
+        }
+
+        val plantPickupsObject = buildJsonObject {
+            playerStats.plantPickups.forEach { (key, value) ->
+                put(key.replace(".", "_"), buildJsonObject {
+                    put("integerValue", value)
+                })
+            }
+        }
 
         val requestBody = buildJsonObject {
             put("fields", buildJsonObject {
@@ -389,6 +436,24 @@ suspend fun savePlayerStatistics(playerStats: PlayerStatistics): Boolean {
                 put("weaponReloads", buildJsonObject { put("integerValue", playerStats.weaponReloads) })
                 put("rocketsLaunched", buildJsonObject { put("integerValue", playerStats.rocketsLaunched) })
                 put("secondsPlayed", buildJsonObject { put("integerValue", playerStats.secondsPlayed) })
+
+                // Объекты с ресурсами
+                put("gathered", buildJsonObject {
+                    put("mapValue", buildJsonObject {
+                        put("fields", gatheredObject)
+                    })
+                })
+                put("collectiblePickups", buildJsonObject {
+                    put("mapValue", buildJsonObject {
+                        put("fields", collectiblePickupsObject)
+                    })
+                })
+                put("plantPickups", buildJsonObject {
+                    put("mapValue", buildJsonObject {
+                        put("fields", plantPickupsObject)
+                    })
+                })
+
                 put("lastUpdatedInDb", buildJsonObject { put("timestampValue", now) })
             })
         }
@@ -1169,6 +1234,32 @@ suspend fun parsePlayerStatisticsFromFirestore(steamId: String, fields: JsonObje
     val secondsPlayed = fields["secondsPlayed"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
     val lastUpdatedInDb = fields["lastUpdatedInDb"]?.jsonObject?.get("timestampValue")?.jsonPrimitive?.content ?: ""
 
+    // Приводим к обычным Map<String, Int>
+    val gathered = fields["gathered"]?.jsonObject
+        ?.get("mapValue")?.jsonObject
+        ?.get("fields")?.jsonObject
+        ?.mapNotNull { (key, value) ->
+            value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+        }?.associate { it.first to it.second } ?: emptyMap()
+
+    val collectiblePickups = fields["collectiblePickups"]?.jsonObject
+        ?.get("mapValue")?.jsonObject
+        ?.get("fields")?.jsonObject
+        ?.mapNotNull { (key, value) ->
+            value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+        }
+        ?.associate { it.first to it.second }
+        ?: emptyMap()
+
+    val plantPickups = fields["plantPickups"]?.jsonObject
+        ?.get("mapValue")?.jsonObject
+        ?.get("fields")?.jsonObject
+        ?.mapNotNull { (key, value) ->
+            value.jsonObject["integerValue"]?.jsonPrimitive?.intOrNull?.let { key.replace("_", ".") to it }
+        }
+        ?.associate { it.first to it.second }
+        ?: emptyMap()
+
     return PlayerStatistics(
         steamId = steamId,
         lastUpdate = lastUpdate,
@@ -1193,6 +1284,9 @@ suspend fun parsePlayerStatisticsFromFirestore(steamId: String, fields: JsonObje
         rocketsLaunched = rocketsLaunched,
         secondsPlayed = secondsPlayed,
         currentName = currentName,
+        gathered = gathered,
+        collectiblePickups = collectiblePickups,
+        plantPickups = plantPickups,
         lastUpdatedInDb = lastUpdatedInDb
     )
 }
