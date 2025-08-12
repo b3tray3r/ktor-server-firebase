@@ -17,6 +17,7 @@ import io.ktor.client.statement.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.datetime.Clock
+import kotlinx.serialization.encodeToString
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 
@@ -979,20 +980,27 @@ fun Route.rconRoutes() {
             println("🔄 Fetching from URL: ${Config.RUST_PLAYER_STATS_COLLECTION}")
 
             val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
-
             println("📊 Response status: ${response.status}")
+
             if (response.status != HttpStatusCode.OK) {
                 val errorBody = response.bodyAsText()
                 println("❌ Error response body: $errorBody")
-                return@get call.respond(HttpStatusCode.InternalServerError, mapOf(
-                    "error" to "Failed to fetch statistics data",
-                    "status" to response.status.value,
-                    "details" to errorBody
-                ))
+                // Избегаем смешанных типов в mapOf (Int + String -> Map<String, Any>) — делаем статус строкой
+                return@get call.respond(
+                    HttpStatusCode.InternalServerError,
+                    mapOf(
+                        "error" to "Failed to fetch statistics data",
+                        "status" to response.status.value.toString(),
+                        "details" to errorBody
+                    )
+                )
             }
 
             val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-            val documents = json["documents"]?.jsonArray ?: return@get call.respond(emptyList<PlayerStatistics>())
+            val documents = json["documents"]?.jsonArray ?: run {
+                // Возвращаем пустой JSON-массив (без использования Ktor сериализации для Map)
+                return@get call.respondText("[]", ContentType.Application.Json)
+            }
 
             val playerStatsList = documents.mapNotNull { doc ->
                 try {
@@ -1005,14 +1013,24 @@ fun Route.rconRoutes() {
                 }
             }
 
-            call.respond(playerStatsList)
+            // Явно сериализуем через kotlinx.serialization в строку и отдаем как application/json —
+            // это обходит потенциальные проблемы Ktor-плагина с полиморфными Map/LinkedHashMap
+            val safeJson = Json {
+                encodeDefaults = true
+                explicitNulls = false
+                allowStructuredMapKeys = true
+            }
+            val payload = safeJson.encodeToString(playerStatsList)
+            call.respondText(payload, ContentType.Application.Json)
 
         } catch (e: Exception) {
             println("❌ Exception in stats-players-list: ${e.message}")
             e.printStackTrace()
-            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to e.message))
+            // Вернём простую строку с ошибкой
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Unknown error")))
         }
     }
+
 
     // Сбор статистики всех игроков (только для админов)
     post("/rcon/collect-all-statistics") {
