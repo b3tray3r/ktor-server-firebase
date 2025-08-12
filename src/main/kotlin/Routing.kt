@@ -20,6 +20,20 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.encodeToString
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
+import com.google.auth.oauth2.GoogleCredentials
+import java.io.ByteArrayInputStream
+
+fun getFirestoreAccessToken(): String {
+    val credsJson = System.getenv("GOOGLE_CREDENTIALS_JSON")
+        ?: throw IllegalStateException("GOOGLE_CREDENTIALS_JSON not set")
+
+    val credentials = GoogleCredentials
+        .fromStream(ByteArrayInputStream(credsJson.toByteArray()))
+        .createScoped(listOf("https://www.googleapis.com/auth/datastore"))
+
+    credentials.refreshIfExpired()
+    return credentials.accessToken.tokenValue
+}
 
 private val client = HttpClient(CIO) {
     install(ContentNegotiation) {
@@ -259,6 +273,9 @@ suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
         }
 
         val saveResponse = client.patch(docUrl) {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+            }
             contentType(ContentType.Application.Json)
             setBody(updateBody)
         }
@@ -281,7 +298,10 @@ suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
 // Функции для работы со статистикой
 suspend fun getAllSteamIdsFromPlayerData(): List<String> {
     return try {
-        val response = client.get(Config.RUST_PLAYER_DATA_COLLECTION)
+        val response = client.get(Config.RUST_PLAYER_DATA_COLLECTION) {headers {
+            append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+        }
+        }
         if (response.status != HttpStatusCode.OK) {
             println("❌ Failed to fetch player data: ${response.status}")
             return emptyList()
@@ -460,6 +480,10 @@ suspend fun savePlayerStatistics(playerStats: PlayerStatistics): Boolean {
         }
 
         val saveResponse = client.patch(docUrl) {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+            }
+
             contentType(ContentType.Application.Json)
             setBody(requestBody)
         }
@@ -564,7 +588,10 @@ suspend fun collectAllPlayersStatistics(): StatisticsCollectionResult {
 
 // Steam и Discord функции
 suspend fun getSteamUserFromFirebase(steamId: String): SteamUserProfile? {
-    val response = client.get(Config.STEAM_USERS_COLLECTION)
+    val response = client.get(Config.STEAM_USERS_COLLECTION) {headers {
+        append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+    }
+    }
     if (response.status != HttpStatusCode.OK) return null
     val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
     val docs = json["documents"]?.jsonArray ?: return null
@@ -736,7 +763,10 @@ suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
 }
 
 suspend fun checkIfSteamUserExists(steamId: String): Boolean {
-    val response = client.get("${Config.STEAM_USERS_COLLECTION}/$steamId")
+    val response = client.get("${Config.STEAM_USERS_COLLECTION}/$steamId") {headers {
+        append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+    }
+    }
     return response.status == HttpStatusCode.OK
 }
 
@@ -765,6 +795,10 @@ suspend fun saveSteamUser(steamId: String) {
 
     try {
         val patchResponse = client.patch("${Config.STEAM_USERS_COLLECTION}/$steamId") {
+            headers {
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+            }
+
             contentType(ContentType.Application.Json)
             setBody(data)
         }
@@ -952,7 +986,10 @@ fun Route.rconRoutes() {
 
         try {
             val docUrl = "${Config.RUST_PLAYER_STATS_COLLECTION}/$steamId"
-            val response = client.get(docUrl)
+            val response = client.get(docUrl) {headers {
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+            }
+            }
 
             if (response.status == HttpStatusCode.OK) {
                 val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
@@ -979,7 +1016,11 @@ fun Route.rconRoutes() {
         try {
             println("🔄 Fetching from URL: ${Config.RUST_PLAYER_STATS_COLLECTION}")
 
-            val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
+            val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION) {headers {
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+            }
+            }
+
             println("📊 Response status: ${response.status}")
 
             if (response.status != HttpStatusCode.OK) {
@@ -1318,7 +1359,12 @@ fun isAdmin(steamId: String): Boolean {
 
 // Вспомогательная функция для получения лидерборда
 suspend fun getLeaderboard(statType: String, limit: Int): LeaderboardResponse {
-    val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION)
+    val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION) {
+        headers {
+            append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+        }
+
+    }
     if (response.status != HttpStatusCode.OK) {
         return LeaderboardResponse(
             statType = statType,

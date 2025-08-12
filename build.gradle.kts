@@ -42,6 +42,11 @@ dependencies {
 
     testImplementation("io.ktor:ktor-server-test-host:$ktorversion")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlinversion")
+
+
+    implementation("com.google.auth:google-auth-library-oauth2-http:1.23.0")
+
+
 }
 
 tasks {
