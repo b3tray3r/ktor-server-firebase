@@ -585,6 +585,8 @@ suspend fun savePlayerStatistics(playerStats: PlayerStatistics): Boolean {
                 put("lastUpdatedInDb", buildJsonObject { put("timestampValue", now) })
             })
         }
+        val requestBodyString = requestBody.toString()
+        println("📝 Request body prepared (${requestBodyString.length} characters)")
 
         val saveResponse = client.patch(docUrl) {
             headers {
@@ -592,7 +594,7 @@ suspend fun savePlayerStatistics(playerStats: PlayerStatistics): Boolean {
             }
 
             contentType(ContentType.Application.Json)
-            setBody(requestBody)
+            setBody(requestBodyString)
         }
 
         if (saveResponse.status.isSuccess()) {
@@ -649,14 +651,20 @@ suspend fun collectAllPlayersStatistics(): StatisticsCollectionResult {
                 val playerStats = parsePlayerStatistics(steamId, rawResponse)
 
                 if (playerStats != null) {
-                    val saved = savePlayerStatistics(playerStats)
+                    // Используем исправленную функцию сохранения
+                    val saved = savePlayerStatistics(playerStats) // Эта функция теперь исправлена
                     if (saved) {
                         successfullyProcessed++
+                        println("✅ Successfully processed and saved: $steamId")
                     } else {
-                        errors.add("Failed to save statistics for $steamId")
+                        val errorMsg = "Failed to save statistics for $steamId"
+                        errors.add(errorMsg)
+                        println("❌ $errorMsg")
                     }
                 } else {
-                    errors.add("Failed to parse statistics for $steamId")
+                    val errorMsg = "Failed to parse statistics for $steamId"
+                    errors.add(errorMsg)
+                    println("❌ $errorMsg")
                 }
 
                 if (index < steamIds.size - 1) {
@@ -666,6 +674,7 @@ suspend fun collectAllPlayersStatistics(): StatisticsCollectionResult {
             } catch (e: Exception) {
                 val errorMsg = "Error processing $steamId: ${e.message}"
                 println("❌ $errorMsg")
+                e.printStackTrace()
                 errors.add(errorMsg)
             }
         }
@@ -683,6 +692,7 @@ suspend fun collectAllPlayersStatistics(): StatisticsCollectionResult {
 
     } catch (e: Exception) {
         println("❌ Fatal error in statistics collection: ${e.message}")
+        e.printStackTrace()
         StatisticsCollectionResult(
             success = false,
             totalPlayers = 0,
@@ -843,39 +853,61 @@ fun parseServerInfo(jsonResponse: String): ServerInfo? {
 
 suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
     val now = Clock.System.now().toString()
-    val token = getFirestoreAccessTokenImproved() // функция из предыдущих сообщений
 
-    for (player in players) {
-        try {
-            val docUrl = "${Config.RUST_PLAYER_DATA_COLLECTION}/${player.id}"
+    try {
+        val token = getFirestoreAccessToken()
+        println("🔑 Firestore access token obtained for saving ${players.size} players")
 
-            val createBody = buildJsonObject {
-                put("fields", buildJsonObject {
-                    put("steamId", buildJsonObject { put("stringValue", player.id) })
-                    put("currentName", buildJsonObject { put("stringValue", player.name) })
-                    put("lastSeen", buildJsonObject { put("timestampValue", now) })
-                })
-            }
+        for ((index, player) in players.withIndex()) {
+            try {
+                println("💾 Saving player ${index + 1}/${players.size}: ${player.name} (${player.id})")
 
-            val response = client.patch(docUrl) {
-                contentType(ContentType.Application.Json)
-                headers {
-                    append(HttpHeaders.Authorization, "Bearer $token")
+                val docUrl = "${Config.RUST_PLAYER_DATA_COLLECTION}/${player.id}"
+
+                val createBody = buildJsonObject {
+                    put("fields", buildJsonObject {
+                        put("steamId", buildJsonObject { put("stringValue", player.id) })
+                        put("currentName", buildJsonObject { put("stringValue", player.name) })
+                        put("lastSeen", buildJsonObject { put("timestampValue", now) })
+                    })
                 }
-                setBody(createBody.toString())
-            }
 
-            if (response.status.isSuccess()) {
-                println("✅ Saved player data: ${player.name} (${player.id}) → ${response.status}")
-            } else {
-                println("❌ Failed to save player data: ${player.name} (${player.id}) → ${response.status}")
-                println("Response body: ${response.bodyAsText()}")
-            }
+                // ВАЖНО: Конвертируем в строку
+                val requestBodyString = createBody.toString()
 
-        } catch (e: Exception) {
-            println("❌ Exception while saving player data for ${player.name}: ${e.message}")
-            e.printStackTrace()
+                val response = client.patch(docUrl) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, "application/json")
+                        append(HttpHeaders.UserAgent, "Kotlin-RCON-Client")
+                    }
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBodyString) // Отправляем как строку
+                }
+
+                if (response.status.isSuccess()) {
+                    println("✅ Successfully saved: ${player.name} (${player.id})")
+                } else {
+                    val errorBody = response.bodyAsText()
+                    println("❌ Failed to save: ${player.name} (${player.id}) → ${response.status}")
+                    println("Error details: $errorBody")
+                }
+
+                // Небольшая задержка между запросами
+                if (index < players.size - 1) {
+                    delay(100)
+                }
+
+            } catch (e: Exception) {
+                println("❌ Exception while saving player data for ${player.name}: ${e.message}")
+                e.printStackTrace()
+            }
         }
+
+    } catch (tokenException: Exception) {
+        println("❌ Failed to get Firestore access token: ${tokenException.message}")
+        tokenException.printStackTrace()
+        throw tokenException
     }
 }
 
