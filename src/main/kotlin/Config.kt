@@ -7,7 +7,6 @@ object Config {
     private val dotenv = dotenv {
         ignoreIfMissing = true // чтобы не падало, если файла нет
     }
-
     val PROJECT_ID: String = dotenv["PROJECT_ID"] ?: System.getenv("PROJECT_ID") ?: error("PROJECT_ID not set")
     val DISCORD_BOT_TOKEN: String = dotenv["DISCORD_BOT_TOKEN"] ?: System.getenv("DISCORD_BOT_TOKEN") ?: error("DISCORD_BOT_TOKEN not set")
     val DISCORD_GUILD_ID: String = dotenv["DISCORD_GUILD_ID"] ?: System.getenv("DISCORD_GUILD_ID") ?: error("DISCORD_GUILD_ID not set")

@@ -26,6 +26,12 @@ import io.ktor.websocket.readText
 import java.io.ByteArrayInputStream
 import io.ktor.client.plugins.websocket.*
 import kotlinx.coroutines.launch
+import io.github.cdimascio.dotenv.dotenv
+import java.io.File
+
+private val dotenv = dotenv {
+    ignoreIfMissing = true
+}
 
 val wsClient = HttpClient {
     install(WebSockets)
@@ -33,9 +39,19 @@ val wsClient = HttpClient {
 val activityRegex = Regex("""^(.+?) active for (\d+) seconds and connected for (\d+) seconds\.$""")
 
 fun getFirestoreAccessToken(): String {
-    val credsJson = System.getenv("GOOGLE_CREDENTIALS_JSON")
+    // Сначала читаем переменную (из .env или из окружения)
+    val credsSource = dotenv["GOOGLE_CREDENTIALS_JSON"]
+        ?: System.getenv("GOOGLE_CREDENTIALS_JSON")
         ?: throw IllegalStateException("GOOGLE_CREDENTIALS_JSON not set")
 
+    // Если это путь к файлу — читаем файл
+    val credsJson = if (File(credsSource).exists()) {
+        File(credsSource).readText()
+    } else {
+        credsSource
+    }
+
+    // Создаём объект GoogleCredentials
     val credentials = GoogleCredentials
         .fromStream(ByteArrayInputStream(credsJson.toByteArray()))
         .createScoped(listOf("https://www.googleapis.com/auth/datastore"))
