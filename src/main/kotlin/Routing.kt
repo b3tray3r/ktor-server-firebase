@@ -249,6 +249,31 @@ suspend fun getPlayerBalance(steamId: String): PlayerBalance? {
         null
     }
 }
+// Улучшенная функция получения токена с дополнительным логированием
+fun getFirestoreAccessTokenImproved(): String {
+    try {
+        val credsJson = System.getenv("GOOGLE_CREDENTIALS_JSON")
+            ?: throw IllegalStateException("GOOGLE_CREDENTIALS_JSON not set")
+
+        println("🔑 Creating credentials from JSON...")
+        val credentials = GoogleCredentials
+            .fromStream(ByteArrayInputStream(credsJson.toByteArray()))
+            .createScoped(listOf("https://www.googleapis.com/auth/datastore"))
+
+        println("🔄 Refreshing credentials...")
+        credentials.refreshIfExpired()
+
+        val token = credentials.accessToken.tokenValue
+        println("✅ Access token obtained: ${token.take(20)}...")
+
+        return token
+
+    } catch (e: Exception) {
+        println("❌ Error getting Firestore access token: ${e.message}")
+        e.printStackTrace()
+        throw e
+    }
+}
 
 suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
     return try {
@@ -275,7 +300,7 @@ suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
 
         val saveResponse = client.patch(docUrl) {
             headers {
-                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
             }
             contentType(ContentType.Application.Json)
             setBody(updateBody)
@@ -300,7 +325,7 @@ suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
 suspend fun getAllSteamIdsFromPlayerData(): List<String> {
     return try {
         val response = client.get(Config.RUST_PLAYER_DATA_COLLECTION) {headers {
-            append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+            append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
         }
         }
         if (response.status != HttpStatusCode.OK) {
@@ -403,6 +428,87 @@ fun parsePlayerStatistics(steamId: String, rawResponse: String): PlayerStatistic
     }
 }
 
+
+// Улучшенная функция сохранения с более детальным логированием
+suspend fun savePlayersDataToFirebaseImproved(players: List<RustPlayer>) {
+    val now = Clock.System.now().toString()
+
+    try {
+        val token = getFirestoreAccessTokenImproved()
+        println("🔑 Firestore access token obtained")
+
+        for ((index, player) in players.withIndex()) {
+            try {
+                println("💾 Saving player ${index + 1}/${players.size}: ${player.name} (${player.id})")
+
+                val docUrl = "${Config.RUST_PLAYER_DATA_COLLECTION}/${player.id}"
+                println("🌐 Document URL: $docUrl")
+
+                val createBody = buildJsonObject {
+                    put("fields", buildJsonObject {
+                        put("steamId", buildJsonObject { put("stringValue", player.id) })
+                        put("currentName", buildJsonObject { put("stringValue", player.name) })
+                        put("lastSeen", buildJsonObject { put("timestampValue", now) })
+                    })
+                }
+
+                println("📝 Request body prepared for ${player.name}")
+
+                val response = client.patch(docUrl) {
+                    contentType(ContentType.Application.Json)
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.UserAgent, "Kotlin-RCON-Client")
+                    }
+                    setBody(createBody.toString())
+                }
+
+                if (response.status.isSuccess()) {
+                    println("✅ Successfully saved: ${player.name} (${player.id}) → ${response.status}")
+                } else {
+                    val errorBody = response.bodyAsText()
+                    println("❌ Failed to save: ${player.name} (${player.id}) → ${response.status}")
+                    println("Error details: $errorBody")
+
+                    // Если это ошибка авторизации, пытаемся обновить токен
+                    if (response.status == HttpStatusCode.Unauthorized) {
+                        println("🔄 Attempting to refresh access token...")
+                        val newToken = getFirestoreAccessTokenImproved()
+                        // Повторяем запрос с новым токеном
+                        val retryResponse = client.patch(docUrl) {
+                            contentType(ContentType.Application.Json)
+                            headers {
+                                append(HttpHeaders.Authorization, "Bearer $newToken")
+                                append(HttpHeaders.UserAgent, "Kotlin-RCON-Client")
+                            }
+                            setBody(createBody.toString())
+                        }
+
+                        if (retryResponse.status.isSuccess()) {
+                            println("✅ Retry successful: ${player.name}")
+                        } else {
+                            println("❌ Retry failed: ${player.name} → ${retryResponse.status}")
+                        }
+                    }
+                }
+
+                // Небольшая задержка между запросами
+                if (index < players.size - 1) {
+                    delay(100) // 100ms между запросами
+                }
+
+            } catch (e: Exception) {
+                println("❌ Exception while saving player data for ${player.name}: ${e.message}")
+                e.printStackTrace()
+            }
+        }
+
+    } catch (tokenException: Exception) {
+        println("❌ Failed to get Firestore access token: ${tokenException.message}")
+        tokenException.printStackTrace()
+        throw tokenException
+    }
+}
 suspend fun savePlayerStatistics(playerStats: PlayerStatistics): Boolean {
     return try {
         val docUrl = "${Config.RUST_PLAYER_STATS_COLLECTION}/${playerStats.steamId}"
@@ -482,7 +588,7 @@ suspend fun savePlayerStatistics(playerStats: PlayerStatistics): Boolean {
 
         val saveResponse = client.patch(docUrl) {
             headers {
-                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
             }
 
             contentType(ContentType.Application.Json)
@@ -590,7 +696,7 @@ suspend fun collectAllPlayersStatistics(): StatisticsCollectionResult {
 // Steam и Discord функции
 suspend fun getSteamUserFromFirebase(steamId: String): SteamUserProfile? {
     val response = client.get(Config.STEAM_USERS_COLLECTION) {headers {
-        append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+        append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
     }
     }
     if (response.status != HttpStatusCode.OK) return null
@@ -737,7 +843,7 @@ fun parseServerInfo(jsonResponse: String): ServerInfo? {
 
 suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
     val now = Clock.System.now().toString()
-    val token = getFirestoreAccessToken() // функция из предыдущих сообщений
+    val token = getFirestoreAccessTokenImproved() // функция из предыдущих сообщений
 
     for (player in players) {
         try {
@@ -756,7 +862,7 @@ suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
                 headers {
                     append(HttpHeaders.Authorization, "Bearer $token")
                 }
-                setBody(createBody)
+                setBody(createBody.toString())
             }
 
             if (response.status.isSuccess()) {
@@ -776,7 +882,7 @@ suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
 
 suspend fun checkIfSteamUserExists(steamId: String): Boolean {
     val response = client.get("${Config.STEAM_USERS_COLLECTION}/$steamId") {headers {
-        append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+        append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
     }
     }
     return response.status == HttpStatusCode.OK
@@ -808,7 +914,7 @@ suspend fun saveSteamUser(steamId: String) {
     try {
         val patchResponse = client.patch("${Config.STEAM_USERS_COLLECTION}/$steamId") {
             headers {
-                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
             }
 
             contentType(ContentType.Application.Json)
@@ -992,7 +1098,7 @@ fun Route.rconRoutes() {
         try {
             val docUrl = "${Config.RUST_PLAYER_STATS_COLLECTION}/$steamId"
             val response = client.get(docUrl) {headers {
-                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
             }
             }
 
@@ -1022,7 +1128,7 @@ fun Route.rconRoutes() {
             println("🔄 Fetching from URL: ${Config.RUST_PLAYER_STATS_COLLECTION}")
 
             val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION) {headers {
-                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+                append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
             }
             }
 
@@ -1132,26 +1238,63 @@ fun Route.rconRoutes() {
         }
     }
 
+// Диагностический эндпоинт для проверки конфигурации
+    get("/debug/firestore-config") {
+        try {
+            val token = getFirestoreAccessTokenImproved()
+            val collectionUrl = Config.RUST_PLAYER_DATA_COLLECTION
+
+            call.respond(mapOf(
+                "token_available" to (token.isNotEmpty()),
+                "token_prefix" to token.take(20),
+                "collection_url" to collectionUrl,
+                "credentials_env_set" to (System.getenv("GOOGLE_CREDENTIALS_JSON") != null)
+            ))
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, mapOf(
+                "error" to e.message,
+                "credentials_env_set" to (System.getenv("GOOGLE_CREDENTIALS_JSON") != null)
+            ))
+        }
+    }
     // Получение информации о сервере и сохранение в БД (только для админов)
     post("/rcon/server-info-and-save") {
-
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@post call.respond(
             HttpStatusCode.InternalServerError,
             RconResponse(success = false, error = "No RCON_PASSWORD")
         )
 
         try {
+            println("🔄 Starting RCON connection...")
             val rconClient = RconClient("80.242.59.103", 36016, rconPassword)
             val rawResponse = rconClient.connectAndFetchStatus()
+            println("✅ RCON response received: ${rawResponse.take(200)}...")
+
             val serverInfo = parseServerInfo(rawResponse)
+            println("📊 Server info parsed: ${serverInfo?.players} players")
 
             if (serverInfo != null) {
                 if (serverInfo.playersList.isNotEmpty()) {
-                    savePlayersDataToFirebase(serverInfo.playersList)
-                    println("✅ Saved ${serverInfo.playersList.size} players to database")
+                    println("💾 Saving ${serverInfo.playersList.size} players to database...")
+                    try {
+                        savePlayersDataToFirebaseImproved(serverInfo.playersList)
+                        println("✅ Successfully saved ${serverInfo.playersList.size} players to database")
+                    } catch (saveException: Exception) {
+                        println("❌ Error saving players to database: ${saveException.message}")
+                        saveException.printStackTrace()
+                        // Возвращаем server info, но с предупреждением
+                        call.respond(HttpStatusCode.PartialContent, mapOf(
+                            "serverInfo" to serverInfo,
+                            "warning" to "Server info retrieved but failed to save players: ${saveException.message}"
+                        ))
+                        return@post
+                    }
+                } else {
+                    println("ℹ️ No players online to save")
                 }
                 call.respond(serverInfo)
             } else {
+                println("❌ Failed to parse server info")
                 call.respond(HttpStatusCode.InternalServerError, RconResponse(
                     success = false,
                     error = "Failed to parse server info"
@@ -1159,7 +1302,8 @@ fun Route.rconRoutes() {
             }
 
         } catch (e: Exception) {
-            println("RCON Error: ${e.message}")
+            println("❌ RCON Error: ${e.message}")
+            e.printStackTrace()
             call.respond(HttpStatusCode.InternalServerError, RconResponse(
                 success = false,
                 error = e.message
@@ -1346,7 +1490,7 @@ fun isAdmin(steamId: String): Boolean {
 suspend fun getLeaderboard(statType: String, limit: Int): LeaderboardResponse {
     val response = client.get(Config.RUST_PLAYER_STATS_COLLECTION) {
         headers {
-            append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessToken()}")
+            append(HttpHeaders.Authorization, "Bearer ${getFirestoreAccessTokenImproved()}")
         }
 
     }
