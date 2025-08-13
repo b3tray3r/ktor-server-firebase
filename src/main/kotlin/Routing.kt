@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.Config.ACTIVITY_COLLECTION
 import com.example.rcon.RconClient
 import io.ktor.server.routing.*
 import io.ktor.server.application.*
@@ -20,11 +21,18 @@ import kotlinx.serialization.encodeToString
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import com.google.auth.oauth2.GoogleCredentials
-import com.google.firebase.cloud.FirestoreClient
-import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import java.io.ByteArrayInputStream
+import java.io.FileInputStream
+import io.ktor.client.*
+import io.ktor.client.plugins.websocket.*
+import io.ktor.client.statement.*
+import io.ktor.websocket.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import com.google.firebase.cloud.FirestoreClient
+import java.util.regex.Pattern
 
 val wsClient = HttpClient {
     install(io.ktor.client.plugins.websocket.WebSockets)
@@ -51,6 +59,38 @@ private val client = HttpClient(CIO) {
             allowStructuredMapKeys = true
         }
     }
+}
+
+suspend fun savePlayerActivity(name: String, active: Int, connected: Int) {
+    val token = getFirestoreAccessToken()
+    val url = "$ACTIVITY_COLLECTION/$name" // имя документа = имя игрока
+
+    val payload = """
+    {
+      "fields": {
+        "name": { "stringValue": "$name" },
+        "activeSeconds": { "integerValue": "$active" },
+        "connectedSeconds": { "integerValue": "$connected" },
+        "timestamp": { "integerValue": ${System.currentTimeMillis()} }
+      }
+    }
+    """
+
+    val response: HttpResponse = client.patch(url) {
+        header(HttpHeaders.Authorization, "Bearer $token")
+        contentType(ContentType.Application.Json)
+        setBody(payload)
+    }
+
+    println("Firestore response: ${response.status}")
+}
+
+suspend fun getAllPlayerActivity(): String {
+    val token = getFirestoreAccessToken()
+    val response: HttpResponse = client.get(ACTIVITY_COLLECTION) {
+        header(HttpHeaders.Authorization, "Bearer $token")
+    }
+    return response.bodyAsText()
 }
 
 // Сессия для безопасной аутентификации
@@ -1072,6 +1112,49 @@ fun Route.steamAuthRoutes() {
 }
 
 fun Route.rconRoutes() {
+    /**
+     * POST /start-activity-logging
+     * Запускает процесс подключения к Rust WebRCON,
+     * слушает сообщения и пишет в Firestore через REST
+     */
+    post("/start-activity-logging") {
+        launch {
+            try {
+                val url = "ws://80.242.59.103:36016/3mvg0styah"  // адрес WebRCON
+                wsClient.webSocket(urlString = url) {
+                    // Включаем datalogging
+                    val enableLogs = """{"Identifier":1,"Message":"datalogging.allactivity true","Name":"WebRcon"}"""
+                    send(Frame.Text(enableLogs))
+                    println("Sent datalogging.allactivity true")
+
+                    // Читаем входящие сообщения
+                    for (frame in incoming) {
+                        if (frame is Frame.Text) {
+                            val text = frame.readText()
+                            println("Received: $text")
+
+                            val match = activityRegex.find(text)
+                            if (match != null) {
+                                val name = match.groupValues[1]
+                                val active = match.groupValues[2].toInt()
+                                val connected = match.groupValues[3].toInt()
+
+                                // Сохраняем через REST
+                                savePlayerActivity(name, active, connected)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                println("WebSocket error: ${e.message}")
+            }
+        }
+
+        call.respondText(
+            "Started activity logging (check server logs for progress)",
+            status = HttpStatusCode.OK
+        )
+    }
     // Получение статистики игрока напрямую с сервера (требует авторизацию)
     get("/rcon/player-stats/{steamId}") {
         val session = call.requireAuth()
@@ -1349,53 +1432,7 @@ fun Route.rconRoutes() {
             ))
         }
     }
-    post("/start-activity-logging") {
-        launch(Dispatchers.IO) {
-            val url = "ws://80.242.59.103:36016/3mvg0styah" // хардкодим для теста
-            try {
-                wsClient.webSocket(urlString = url) {
-                    // Включаем datalogging
-                    val enableLogs = """{"Identifier":1,"Message":"datalogging.allactivity","Name":"WebRcon"}"""
-                    send(Frame.Text(enableLogs))
 
-                    for (frame in incoming) {
-                        if (frame is Frame.Text) {
-                            val text = frame.readText()
-                            println("📥 Received: $text")
-
-                            val match = activityRegex.find(text)
-                            if (match != null) {
-                                val name = match.groupValues[1]
-                                val active = match.groupValues[2].toInt()
-                                val connected = match.groupValues[3].toInt()
-
-                                // Пишем в Firestore
-                                val db = FirestoreClient.getFirestore()
-                                val docRef = db.collection("player_activity").document(name)
-                                val data = mapOf(
-                                    "name" to name,
-                                    "activeSeconds" to active,
-                                    "connectedSeconds" to connected,
-                                    "timestamp" to System.currentTimeMillis()
-                                )
-                                docRef.set(data)
-                                println("✅ Updated Firestore: $name $active/$connected")
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                println("❌ WebSocket error: ${e.message}")
-            }
-        }
-        call.respondText("Started activity logging", status = HttpStatusCode.OK)
-    }
-    get("/get-activity-data") {
-        val db = FirestoreClient.getFirestore()
-        val snapshot = db.collection("player_activity").get().get()
-        val result = snapshot.documents.map { it.data }
-        call.respond(result)
-    }
 
     // Добавление баланса игроку (только для админов)
     post("/rcon/add-balance/{steamId}") {

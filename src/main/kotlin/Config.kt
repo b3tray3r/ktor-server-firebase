@@ -15,4 +15,5 @@ object Config {
     val RUST_PLAYER_DATA_COLLECTION = "$BASE_URL/rust_player_data"
     val RUST_PLAYER_STATS_COLLECTION = "$BASE_URL/rust_player_stats"
     val RUST_PLAYER_BALANCE_COLLECTION = "$BASE_URL/rust_player_balance"
+    val ACTIVITY_COLLECTION = "$BASE_URL/player_activity"
 }
