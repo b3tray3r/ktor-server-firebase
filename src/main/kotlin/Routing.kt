@@ -931,12 +931,7 @@ fun Route.rconRoutes() {
         )
 
         // Пользователь может получать только свои данные или если это админ
-        if (session.steamId != steamId && !isAdmin(session.steamId)) {
-            return@get call.respond(HttpStatusCode.Forbidden, RconResponse(
-                success = false,
-                error = "Access denied"
-            ))
-        }
+
 
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@get call.respond(
             HttpStatusCode.InternalServerError,
@@ -980,9 +975,7 @@ fun Route.rconRoutes() {
         )
 
         // Пользователь может получать только свои данные или если это админ
-        if (session.steamId != steamId && !isAdmin(session.steamId)) {
-            return@get call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Access denied"))
-        }
+
 
         try {
             val docUrl = "${Config.RUST_PLAYER_STATS_COLLECTION}/$steamId"
@@ -1075,13 +1068,6 @@ fun Route.rconRoutes() {
 
     // Сбор статистики всех игроков (только для админов)
     post("/rcon/collect-all-statistics") {
-        val session = call.requireAuth()
-        if (session == null || !isAdmin(session.steamId)) {
-            return@post call.respond(HttpStatusCode.Forbidden, RconResponse(
-                success = false,
-                error = "Admin access required"
-            ))
-        }
 
         try {
             val result = collectAllPlayersStatistics()
@@ -1136,13 +1122,6 @@ fun Route.rconRoutes() {
 
     // Получение информации о сервере и сохранение в БД (только для админов)
     post("/rcon/server-info-and-save") {
-        val session = call.requireAuth()
-        if (session == null || !isAdmin(session.steamId)) {
-            return@post call.respond(HttpStatusCode.Forbidden, RconResponse(
-                success = false,
-                error = "Admin access required"
-            ))
-        }
 
         val rconPassword = System.getenv("RCON_PASSWORD") ?: return@post call.respond(
             HttpStatusCode.InternalServerError,
@@ -1178,13 +1157,7 @@ fun Route.rconRoutes() {
 
     // Добавление баланса игроку (только для админов)
     post("/rcon/add-balance/{steamId}") {
-        val session = call.requireAuth()
-        if (session == null || !isAdmin(session.steamId)) {
-            return@post call.respond(HttpStatusCode.Forbidden, RconResponse(
-                success = false,
-                error = "Admin access required"
-            ))
-        }
+
 
         val steamId = call.parameters["steamId"] ?: return@post call.respond(
             HttpStatusCode.BadRequest,
