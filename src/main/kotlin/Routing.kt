@@ -24,18 +24,11 @@ import com.google.auth.oauth2.GoogleCredentials
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import java.io.ByteArrayInputStream
-import java.io.FileInputStream
-import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
-import io.ktor.client.statement.*
-import io.ktor.websocket.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import com.google.firebase.cloud.FirestoreClient
-import java.util.regex.Pattern
 
 val wsClient = HttpClient {
-    install(io.ktor.client.plugins.websocket.WebSockets)
+    install(WebSockets)
 }
 val activityRegex = Regex("""^(.+?) active for (\d+) seconds and connected for (\d+) seconds\.$""")
 
@@ -242,7 +235,7 @@ data class AuthResponse(
 )
 
 // Middleware для проверки сессии
-suspend fun ApplicationCall.requireAuth(): UserSession? {
+fun ApplicationCall.requireAuth(): UserSession? {
     val authHeader = request.headers["Authorization"]
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
         return null
@@ -335,7 +328,16 @@ suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
         val rconClient = RconClient("80.242.59.103", 36016, rconPassword)
         val rconResponse = rconClient.executeCommand("konurashop.addbalance $steamId $amount")
 
-        // Сохраняем новый баланс в БД
+        println("📡 RCON response: $rconResponse")
+
+        // Проверяем, что сервер действительно выполнил команду
+        if (!rconResponse.contains("OK", ignoreCase = true) &&
+            !rconResponse.contains("success", ignoreCase = true)) {
+            println("❌ RCON command failed for $steamId: $rconResponse")
+            return false
+        }
+
+        // Сохраняем новый баланс в БД только если команда выполнилась
         val docUrl = "${Config.RUST_PLAYER_BALANCE_COLLECTION}/$steamId"
         val updateBody = buildJsonObject {
             put("fields", buildJsonObject {
@@ -357,7 +359,7 @@ suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
             println("✅ Balance updated for $steamId: $currentBalance + $amount = $newBalance")
             true
         } else {
-            println("❌ Failed to save balance for $steamId")
+            println("❌ Failed to save balance for $steamId (HTTP ${saveResponse.status.value})")
             false
         }
 
@@ -367,6 +369,7 @@ suspend fun updatePlayerBalance(steamId: String, amount: Int): Boolean {
         false
     }
 }
+
 
 // Функции для работы со статистикой
 suspend fun getAllSteamIdsFromPlayerData(): List<String> {
@@ -419,23 +422,23 @@ fun parsePlayerStatistics(steamId: String, rawResponse: String): PlayerStatistic
 
         // Извлекаем имя игрока из массива имен
         val names = statisticsJson["Names"]?.jsonArray?.mapNotNull {
-            it.jsonPrimitive?.contentOrNull
+            it.jsonPrimitive.contentOrNull
         } ?: emptyList()
         val currentName = names.lastOrNull() ?: "Unknown"
 
         // Извлекаем объекты с ресурсами и конвертируем в обычные Map
         val gathered = statisticsJson["Gathered"]?.jsonObject?.mapNotNull { (key, value) ->
-            value.jsonPrimitive?.intOrNull?.let { key to it }
+            value.jsonPrimitive.intOrNull?.let { key to it }
         } ?.associate { it.first to it.second }
             ?: emptyMap()
 
         val collectiblePickups = statisticsJson["CollectiblePickups"]?.jsonObject?.mapNotNull { (key, value) ->
-            value.jsonPrimitive?.intOrNull?.let { key to it }
+            value.jsonPrimitive.intOrNull?.let { key to it }
         } ?.associate { it.first to it.second }
             ?: emptyMap()
 
         val plantPickups = statisticsJson["PlantPickups"]?.jsonObject?.mapNotNull { (key, value) ->
-            value.jsonPrimitive?.intOrNull?.let { key to it }
+            value.jsonPrimitive.intOrNull?.let { key to it }
         } ?.associate { it.first to it.second }
             ?: emptyMap()
 
@@ -1155,6 +1158,19 @@ fun Route.rconRoutes() {
             status = HttpStatusCode.OK
         )
     }
+    get("/get-activity-data") {
+        try {
+            val result = getAllPlayerActivity() // функция возвращает JSON-строку
+            call.respondText(result, ContentType.Application.Json)
+        } catch (e: Exception) {
+            call.respondText(
+                """{"error": "${e.message}"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.InternalServerError
+            )
+        }
+    }
+
     // Получение статистики игрока напрямую с сервера (требует авторизацию)
     get("/rcon/player-stats/{steamId}") {
         val session = call.requireAuth()
@@ -1520,7 +1536,7 @@ fun Route.rconRoutes() {
 }
 
 // Вспомогательные функции
-suspend fun parsePlayerStatisticsFromFirestore(steamId: String, fields: JsonObject): PlayerStatistics {
+fun parsePlayerStatisticsFromFirestore(steamId: String, fields: JsonObject): PlayerStatistics {
     val currentName = fields["currentName"]?.jsonObject?.get("stringValue")?.jsonPrimitive?.content ?: "Unknown"
     val lastUpdate = fields["lastUpdate"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.longOrNull ?: 0L
     val joins = fields["joins"]?.jsonObject?.get("integerValue")?.jsonPrimitive?.intOrNull ?: 0
