@@ -21,6 +21,7 @@ import kotlinx.serialization.encodeToString
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import com.google.auth.oauth2.GoogleCredentials
+import io.ktor.client.utils.EmptyContent.contentType
 import java.io.ByteArrayInputStream
 
 fun getFirestoreAccessToken(): String {
@@ -736,6 +737,7 @@ fun parseServerInfo(jsonResponse: String): ServerInfo? {
 
 suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
     val now = Clock.System.now().toString()
+    val token = getFirestoreAccessToken() // функция из предыдущих сообщений
 
     for (player in players) {
         try {
@@ -749,18 +751,28 @@ suspend fun savePlayersDataToFirebase(players: List<RustPlayer>) {
                 })
             }
 
-            client.patch(docUrl) {
+            val response = client.patch(docUrl) {
                 contentType(ContentType.Application.Json)
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $token")
+                }
                 setBody(createBody)
             }
 
-            println("✅ Saved player data: ${player.name} (${player.id})")
+            if (response.status.isSuccess()) {
+                println("✅ Saved player data: ${player.name} (${player.id}) → ${response.status}")
+            } else {
+                println("❌ Failed to save player data: ${player.name} (${player.id}) → ${response.status}")
+                println("Response body: ${response.bodyAsText()}")
+            }
 
         } catch (e: Exception) {
-            println("❌ Error saving player data for ${player.name}: ${e.message}")
+            println("❌ Exception while saving player data for ${player.name}: ${e.message}")
+            e.printStackTrace()
         }
     }
 }
+
 
 suspend fun checkIfSteamUserExists(steamId: String): Boolean {
     val response = client.get("${Config.STEAM_USERS_COLLECTION}/$steamId") {headers {
