@@ -39,6 +39,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationversion")
     implementation("ch.qos.logback:logback-classic:$logbackversion")
     implementation("io.github.cdimascio:dotenv-kotlin:6.4.1")
+    implementation("io.ktor:ktor-client-websockets:2.3.7")
+    implementation("com.google.firebase:firebase-admin:9.2.0")
 
     testImplementation("io.ktor:ktor-server-test-host:$ktorversion")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:$kotlinversion")

@@ -14,15 +14,22 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.statement.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
 import kotlinx.datetime.Clock
 import kotlinx.serialization.encodeToString
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import com.google.auth.oauth2.GoogleCredentials
-import io.ktor.client.utils.EmptyContent.contentType
+import com.google.firebase.cloud.FirestoreClient
+import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
 import java.io.ByteArrayInputStream
+
+val wsClient = HttpClient {
+    install(io.ktor.client.plugins.websocket.WebSockets)
+}
+val activityRegex = Regex("""^(.+?) active for (\d+) seconds and connected for (\d+) seconds\.$""")
 
 fun getFirestoreAccessToken(): String {
     val credsJson = System.getenv("GOOGLE_CREDENTIALS_JSON")
@@ -1341,6 +1348,53 @@ fun Route.rconRoutes() {
                 error = e.message
             ))
         }
+    }
+    post("/start-activity-logging") {
+        launch(Dispatchers.IO) {
+            val url = "ws://80.242.59.103:36016/3mvg0styah" // хардкодим для теста
+            try {
+                wsClient.webSocket(urlString = url) {
+                    // Включаем datalogging
+                    val enableLogs = """{"Identifier":1,"Message":"datalogging.allactivity","Name":"WebRcon"}"""
+                    send(Frame.Text(enableLogs))
+
+                    for (frame in incoming) {
+                        if (frame is Frame.Text) {
+                            val text = frame.readText()
+                            println("📥 Received: $text")
+
+                            val match = activityRegex.find(text)
+                            if (match != null) {
+                                val name = match.groupValues[1]
+                                val active = match.groupValues[2].toInt()
+                                val connected = match.groupValues[3].toInt()
+
+                                // Пишем в Firestore
+                                val db = FirestoreClient.getFirestore()
+                                val docRef = db.collection("player_activity").document(name)
+                                val data = mapOf(
+                                    "name" to name,
+                                    "activeSeconds" to active,
+                                    "connectedSeconds" to connected,
+                                    "timestamp" to System.currentTimeMillis()
+                                )
+                                docRef.set(data)
+                                println("✅ Updated Firestore: $name $active/$connected")
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                println("❌ WebSocket error: ${e.message}")
+            }
+        }
+        call.respondText("Started activity logging", status = HttpStatusCode.OK)
+    }
+    get("/get-activity-data") {
+        val db = FirestoreClient.getFirestore()
+        val snapshot = db.collection("player_activity").get().get()
+        val result = snapshot.documents.map { it.data }
+        call.respond(result)
     }
 
     // Добавление баланса игроку (только для админов)
